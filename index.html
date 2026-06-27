@@ -1,4 +1,4 @@
-<html lang="en" style="--col-amb: #020202; --col-torch: #ffffff; height: 100%; overscroll-behavior: contain; -webkit-touch-callout: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;"><head><style>*{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;}input,textarea,[contenteditable]{-webkit-user-select:text!important;user-select:text!important;}</style>
+<html lang="en" style="height: 100%; overscroll-behavior: contain; -webkit-touch-callout: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; --col-amb: #020202; --col-torch: #ffffff;"><head><style>*{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;}input,textarea,[contenteditable]{-webkit-user-select:text!important;user-select:text!important;}</style>
 <script>
 (function() {
   if (typeof CustomEvent === 'function') return;
@@ -1519,7 +1519,7 @@
 
     <div id="game-container">
         <!-- WebGL Canvas -->
-        <canvas id="three-canvas" data-engine="three.js r180" width="576" height="880" style="width: 384px; height: 587px;"></canvas>
+        <canvas id="three-canvas" data-engine="three.js r180" width="582" height="886"></canvas>
 
         <!-- Touch Controls -->
         <div id="touch-zones">
@@ -1527,8 +1527,8 @@
             <div id="zone-look"></div>
         </div>
 
-        <div id="joystick-base" style="left: 61.333332px; top: 530px; display: none;"></div>
-        <div id="joystick-nub" style="left: 61.333332px; top: 490px; display: none;"></div>
+        <div id="joystick-base"></div>
+        <div id="joystick-nub"></div>
 
         <!-- Atmospheric Vignette / Screen Glitch Overlay -->
         <div id="glitch-overlay" class="absolute inset-0 bg-red-950/0 pointer-events-none z-45 transition-all duration-300 flex flex-col items-center justify-center">
@@ -1581,7 +1581,8 @@
         window.appState = {
             config: {
                 playerSpeed: 1.5,
-                scareFrequency: 0.5
+                scareFrequency: 0.5,
+                resolutionScale: 1.0
             },
             gameState: 'ready',
             startTime: 0,
@@ -1609,6 +1610,16 @@
       "step": 0.1,
       "value": 0.5,
       "path": "appState.config.scareFrequency"
+    },
+    {
+      "id": "resolutionScale",
+      "label": "Resolution Scale",
+      "type": "slider",
+      "min": 0.25,
+      "max": 1.5,
+      "step": 0.05,
+      "value": 1.0,
+      "path": "appState.config.resolutionScale"
     }
   ],
   "images": [
@@ -1790,11 +1801,18 @@
         const TILE_SIZE = 1;
         const PLAYER_SIZE = 0.2;
 
+        function onWindowResize() {
+            const canvas = renderer.domElement;
+            camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            camera.updateProjectionMatrix();
+            const resScale = window.appState.config.resolutionScale || 1.0;
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5) * resScale);
+        }
+
         function initThreeJS() {
             const canvas = document.getElementById('three-canvas');
             renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x010101);
@@ -1833,6 +1851,7 @@
             loadStalker();
 
             window.addEventListener('resize', onWindowResize);
+            onWindowResize();
         }
 
         function loadStalker() {
@@ -1966,13 +1985,6 @@
             updateDynamicWalls(true);
         }
 
-        function onWindowResize() {
-            const canvas = renderer.domElement;
-            camera.aspect = canvas.clientWidth / canvas.clientHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-        }
-
         // ==========================================
         // INPUT CONTROLS
         // ==========================================
@@ -1985,14 +1997,57 @@
         let yaw = 0;
         let pitch = 0;
 
+        let isPC = false;
+        const keysPressed = { w: false, a: false, s: false, d: false };
+
+        function enablePCMode() {
+            if (isPC) return;
+            isPC = true;
+            const zMove = document.getElementById('zone-move');
+            const zLook = document.getElementById('zone-look');
+            const joyBase = document.getElementById('joystick-base');
+            const joyNub = document.getElementById('joystick-nub');
+            if (zMove) zMove.style.display = 'none';
+            if (zLook) zLook.style.width = '100%';
+            if (joyBase) joyBase.style.display = 'none';
+            if (joyNub) joyNub.style.display = 'none';
+            moveVector = { x: 0, y: 0 };
+            moveTouchId = null;
+        }
+
         function initControls() {
             const zMove = document.getElementById('zone-move');
             const zLook = document.getElementById('zone-look');
             const joyBase = document.getElementById('joystick-base');
             const joyNub = document.getElementById('joystick-nub');
 
+            // Keyboard input listeners
+            window.addEventListener('keydown', e => {
+                if (window.appState.gameState !== 'playing') return;
+                const key = e.key.toLowerCase();
+                if (key === 'w' || e.key === 'ArrowUp') { keysPressed.w = true; enablePCMode(); }
+                if (key === 'a' || e.key === 'ArrowLeft') { keysPressed.a = true; enablePCMode(); }
+                if (key === 's' || e.key === 'ArrowDown') { keysPressed.s = true; enablePCMode(); }
+                if (key === 'd' || e.key === 'ArrowRight') { keysPressed.d = true; enablePCMode(); }
+            });
+
+            window.addEventListener('keyup', e => {
+                const key = e.key.toLowerCase();
+                if (key === 'w' || e.key === 'ArrowUp') keysPressed.w = false;
+                if (key === 'a' || e.key === 'ArrowLeft') keysPressed.a = false;
+                if (key === 's' || e.key === 'ArrowDown') keysPressed.s = false;
+                if (key === 'd' || e.key === 'ArrowRight') keysPressed.d = false;
+            });
+
+            // Detect PC / Keyboard environment on startup
+            const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+            const isFinePointer = window.matchMedia('(pointer: fine)').matches;
+            if (!hasTouch || isFinePointer) {
+                enablePCMode();
+            }
+
             zMove.addEventListener('pointerdown', e => {
-                if(moveTouchId !== null) return;
+                if(isPC || moveTouchId !== null) return;
                 moveTouchId = e.pointerId;
                 moveOrigin = { x: e.clientX, y: e.clientY };
                 
@@ -2100,6 +2155,22 @@
         function updatePlayerMovement(delta) {
             playerGroup.rotation.y = yaw;
             camera.rotation.x = pitch;
+
+            if (isPC) {
+                moveVector.x = 0;
+                moveVector.y = 0;
+                if (keysPressed.w) moveVector.y = -1;
+                if (keysPressed.s) moveVector.y = 1;
+                if (keysPressed.a) moveVector.x = -1;
+                if (keysPressed.d) moveVector.x = 1;
+
+                // Normalize movement diagonal speeds
+                if (moveVector.x !== 0 && moveVector.y !== 0) {
+                    const len = Math.hypot(moveVector.x, moveVector.y);
+                    moveVector.x /= len;
+                    moveVector.y /= len;
+                }
+            }
 
             if (moveVector.x === 0 && moveVector.y === 0) {
                 walkTime = 0;
@@ -2694,6 +2765,9 @@
                         document.documentElement.style.setProperty(item.cssVar, value);
                     } else if (item.path) {
                         setNestedValue(window, item.path, value);
+                        if (id === 'resolutionScale') {
+                            onWindowResize();
+                        }
                     } else if (item.selector) {
                         const el = document.querySelector(item.selector);
                         if (!el) return false;
