@@ -1544,7 +1544,7 @@
         </div>
 
         <!-- Glitch video and VHS screen overlay -->
-        <video id="scare-video" src="https://prod-data.sekai.chat/v3-games/chat-creation/eac54441-d110-476e-8384-75988ae24be8.mov" playsinline="" style="display:none; position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:100;"></video>
+        <video id="scare-video" src="https://prod-data.sekai.chat/v3-games/chat-creation/eac54441-d110-476e-8384-75988ae24be8.mov" playsinline="" webkit-playsinline="true" preload="auto" style="display:none; position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:100;"></video>
         <div id="vhs-screen" style="display:none; position:absolute; inset:0; width:100%; height:100%; background:black; color:#00ff00; font-family:monospace; font-size:48px; justify-content:center; align-items:center; z-index:101; flex-direction:column; text-shadow: 0 0 10px #00ff00;">
             <div style="font-size: 80px; letter-spacing: 10px; margin-bottom: 20px; animation: glitchText 1s infinite alternate;">: )</div>
         </div>
@@ -1572,7 +1572,6 @@
     <!-- Application Logic -->
     <script type="module">
         import * as THREE from 'three';
-        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
         // ==========================================
         // STATE & METADATA
@@ -1635,19 +1634,16 @@
       "type": "image",
       "value": "https://prod-data.sekai.chat/aiu-asset-image/import/auto/be63dc49cdde7b1264d3f4f41d5526b9.jpg",
       "description": "dark damp concrete floor"
-    }
-  ],
-  "models": [
+    },
     {
-        "id": "stalker_model",
-        "label": "Stalker Entity",
-        "type": "model",
-        "value": "https://prod-data.sekai.chat/v3-games/chat-creation/models/a5d90585-336f-47fe-a22d-ab7b1d91f027.glb",
-        "name": "Bacteria",
-        "description": "creepy elongated creature bacteria",
-        "selector": "#stalker-model"
+      "id": "shadowEntity",
+      "label": "Shadow Entity",
+      "type": "image",
+      "value": "https://prod-data.sekai.chat/aiu-character/user-inserted/4929679/eedee91e-131f-436d-a43b-2f9745b6c0c1_body.png?AWSAccessKeyId=AKIAQE43KJDNQNXWXTOG&Signature=LxJUOF6Uewey4bW%2B1RvBOvgaWW4%3D&Expires=1774049920",
+      "description": "dark shadowy humanoid silhouette glowing white eyes"
     }
   ],
+  "models": [],
   "videos": [],
   "music": [
     {
@@ -1790,9 +1786,32 @@
         let scene, camera, renderer, clock, playerGroup;
         let wallMesh, floorMesh, ceilingMesh;
         let floorTex, ceilTex;
-        let stalkerEntity = null;
-        let stalkerTimer = 0;
+        let shadowMesh = null;
+        let shadowTexture = null;
+        let shadowSpottedTime = 0;
+        let shadowIsSpotted = false;
         let walkTime = 0;
+
+        function loadShadowEntity() {
+            const url = getConfig('images', 'shadowEntity');
+            if (url) {
+                const loader = new THREE.TextureLoader();
+                loader.load(url, (tex) => {
+                    shadowTexture = tex;
+                    const mat = new THREE.MeshBasicMaterial({
+                        map: shadowTexture,
+                        transparent: true,
+                        opacity: 0.2,
+                        depthWrite: false,
+                        fog: false
+                    });
+                    const geo = new THREE.PlaneGeometry(0.8, 1.6);
+                    shadowMesh = new THREE.Mesh(geo, mat);
+                    shadowMesh.visible = false;
+                    scene.add(shadowMesh);
+                });
+            }
+        }
 
         let lastPlayerGridX = null;
         let lastPlayerGridZ = null;
@@ -1847,7 +1866,7 @@
             scene.add(ambient);
 
             buildLevel();
-            loadStalker();
+            loadShadowEntity();
 
             window.addEventListener('resize', onWindowResize);
             onWindowResize();
@@ -1862,6 +1881,8 @@
                     stalkerEntity.scale.set(0.4, 0.4, 0.4);
                     stalkerEntity.visible = false;
                     scene.add(stalkerEntity);
+                }, undefined, (err) => {
+                    console.error("Failed to load stalker model:", err);
                 });
             }
         }
@@ -2222,64 +2243,170 @@
 
         let scareTimer = 0;
         let ambientFlickerTime = 0;
-        let shadowFigure = null;
-        let shadowActive = false;
+        let timeSinceStopped = 0;
+        let fakeFootstepsPlayed = 0;
 
-        function updateStalker(delta) {
-            if (!stalkerEntity) return;
+        function playFakeFootstep() {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(60, now);
+            osc.frequency.exponentialRampToValueAtTime(15, now + 0.18);
+            
+            const filter = audioCtx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(90, now);
+            
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            gain.gain.setValueAtTime(0.25, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+            
+            osc.start(now);
+            osc.stop(now + 0.2);
+        }
 
-            if (!stalkerEntity.visible) {
-                // Spawn stalker somewhere in the direction the player is NOT looking
-                if (Math.random() < 0.015) {
-                    const spawnAngle = yaw + Math.PI + (Math.random() - 0.5) * 1.5; 
-                    const dist = 6 + Math.random() * 3;
-                    const sx = playerGroup.position.x + Math.sin(spawnAngle) * dist;
-                    const sz = playerGroup.position.z + Math.cos(spawnAngle) * dist;
+        function playCreepyWhisper() {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+            const osc1 = audioCtx.createOscillator();
+            const osc2 = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(380, now);
+            osc1.frequency.linearRampToValueAtTime(280, now + 1.2);
+            
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(420, now);
+            osc2.frequency.linearRampToValueAtTime(300, now + 1.2);
+            
+            const modulator = audioCtx.createOscillator();
+            const modGain = audioCtx.createGain();
+            modulator.frequency.value = 5;
+            modGain.gain.value = 40;
+            
+            modulator.connect(modGain);
+            modGain.connect(osc1.frequency);
+            modGain.connect(osc2.frequency);
+            
+            osc1.connect(gain);
+            osc2.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.06, now + 0.25);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 1.4);
+            
+            modulator.start(now);
+            osc1.start(now);
+            osc2.start(now);
+            
+            modulator.stop(now + 1.4);
+            osc1.stop(now + 1.4);
+            osc2.stop(now + 1.4);
+        }
 
-                    const gx = Math.round(sx);
-                    const gz = Math.round(sz);
-                    if (getCell(gx, gz) === '.') {
-                        stalkerEntity.position.set(sx, 0.4, sz);
-                        stalkerEntity.visible = true;
-                        stalkerTimer = 0;
-                    }
+        function isLineOfSightClear(x1, z1, x2, z2) {
+            const dx = x2 - x1;
+            const dz = z2 - z1;
+            const dist = Math.hypot(dx, dz);
+            const steps = Math.max(Math.floor(dist * 10), 1);
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const tx = Math.round(x1 + dx * t);
+                const tz = Math.round(z1 + dz * t);
+                if (getCell(tx, tz) === 'W') {
+                    return false;
                 }
-            } else {
-                // Stalker creeps towards the player
-                const dx = playerGroup.position.x - stalkerEntity.position.x;
-                const dz = playerGroup.position.z - stalkerEntity.position.z;
-                const dist = Math.hypot(dx, dz);
+            }
+            return true;
+        }
+
+        function trySpawnShadow() {
+            if (!shadowMesh || shadowMesh.visible) return;
+            if (Math.random() > 0.005) return; // Spawn less frequently (reduced from 0.04)
+
+            const px = playerGroup.position.x;
+            const pz = playerGroup.position.z;
+            
+            let bestX = null, bestZ = null;
+            
+            // Try to find a spot in front of the player's current view field
+            for (let i = 0; i < 40; i++) {
+                const angle = yaw + (Math.random() - 0.5) * 1.6;
+                const dist = 6 + Math.random() * 4.5;
+                const tx = Math.round(px - Math.sin(angle) * dist);
+                const tz = Math.round(pz - Math.cos(angle) * dist);
                 
-                if (dist > 0.1) {
-                    stalkerEntity.position.x += (dx / dist) * delta * 1.2;
-                    stalkerEntity.position.z += (dz / dist) * delta * 1.2;
-                    stalkerEntity.rotation.y = Math.atan2(dx, dz);
-                }
-
-                // Check if in camera frustum
-                const frustum = new THREE.Frustum();
-                const projScreenMatrix = new THREE.Matrix4();
-                projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-                frustum.setFromProjectionMatrix(projScreenMatrix);
-
-                if (frustum.containsPoint(stalkerEntity.position)) {
-                    stalkerTimer += delta;
-                    if (stalkerTimer > 0.5) {
-                        stalkerEntity.visible = false;
+                if (getCell(tx, tz) === '.') {
+                    const actualDist = Math.hypot(tx - px, tz - pz);
+                    if (actualDist >= 5.5 && actualDist <= 11) {
+                        if (isLineOfSightClear(px, pz, tx, tz)) {
+                            bestX = tx;
+                            bestZ = tz;
+                            break;
+                        }
                     }
                 }
+            }
+            
+            if (bestX !== null && bestZ !== null) {
+                // Lowered the entity slightly (from 0.8 to 0.4) so its face and form are visible near player eye height
+                shadowMesh.position.set(bestX, 0.4, bestZ);
+                shadowMesh.visible = true;
+                shadowIsSpotted = false;
+                shadowSpottedTime = 0;
+            }
+        }
 
-                // If caught - DO NOT DIE, instead scare and reposition stalker
-                if (dist < 0.7) {
-                    stalkerEntity.visible = false;
-                    playSound('sfx-lose', 'lose');
-                    const noise = document.getElementById('glitch-noise');
-                    if (noise) {
-                        noise.style.opacity = '0.7';
-                        setTimeout(() => { noise.style.opacity = '0'; }, 400);
-                    }
-                    sendMessage('gen_vibration', { duration: 300 }, false);
+        function updateShadowEntity(delta) {
+            if (!shadowMesh) return;
+
+            if (!shadowMesh.visible) {
+                trySpawnShadow();
+                return;
+            }
+
+            // Billboard effect: rotate plane to face the player group
+            shadowMesh.lookAt(playerGroup.position.x, shadowMesh.position.y, playerGroup.position.z);
+
+            // Check if spotted inside frustum and line of sight is clear (not through walls)
+            const frustum = new THREE.Frustum();
+            const projScreenMatrix = new THREE.Matrix4();
+            projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(projScreenMatrix);
+
+            const inFrustum = frustum.containsPoint(shadowMesh.position);
+            const los = isLineOfSightClear(playerGroup.position.x, playerGroup.position.z, shadowMesh.position.x, shadowMesh.position.z);
+
+            if (inFrustum && los) {
+                if (!shadowIsSpotted) {
+                    shadowIsSpotted = true;
+                    shadowSpottedTime = 0;
                 }
+                shadowSpottedTime += delta;
+                if (shadowSpottedTime >= 2.0) {
+                    shadowMesh.visible = false;
+                }
+            }
+
+            // Close contact triggers safe jumpscare visuals
+            const dist = Math.hypot(playerGroup.position.x - shadowMesh.position.x, playerGroup.position.z - shadowMesh.position.z);
+            if (dist < 0.8) {
+                shadowMesh.visible = false;
+                playSound('sfx-lose', 'lose');
+                const noise = document.getElementById('glitch-noise');
+                if (noise) {
+                    noise.style.opacity = '0.7';
+                    setTimeout(() => { noise.style.opacity = '0'; }, 400);
+                }
+                sendMessage('gen_vibration', { duration: 300 }, false).catch(() => {});
             }
         }
 
@@ -2427,8 +2554,8 @@
                     flashlight.intensity = 0.15;
                 }
 
-                if (stalkerEntity && stalkerEntity.visible) {
-                    const dist = Math.hypot(stalkerEntity.position.x - playerGroup.position.x, stalkerEntity.position.z - playerGroup.position.z);
+                if (shadowMesh && shadowMesh.visible) {
+                    const dist = Math.hypot(shadowMesh.position.x - playerGroup.position.x, shadowMesh.position.z - playerGroup.position.z);
                     if (dist < 3) {
                         flashlight.intensity = Math.random() < 0.35 ? 0 : 0.03;
                     }
@@ -2452,31 +2579,27 @@
                 });
             }
 
-            // 4. Distant Shadow Spawning (More frequent shadows)
-            if (!shadowActive && Math.random() < 0.02 * freqScale) {
-                spawnDistantShadow();
-            }
-            if (shadowActive && shadowFigure) {
-                const dist = Math.hypot(shadowFigure.position.x - playerGroup.position.x, shadowFigure.position.z - playerGroup.position.z);
-                if (dist < 2.2) {
-                    removeDistantShadow();
-                }
-                
-                const frustum = new THREE.Frustum();
-                const projScreenMatrix = new THREE.Matrix4();
-                projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-                frustum.setFromProjectionMatrix(projScreenMatrix);
-                if (frustum.containsPoint(shadowFigure.position)) {
-                    shadowFigure.scale.y -= delta * 2;
-                    if (shadowFigure.scale.y <= 0) {
-                        removeDistantShadow();
-                    }
-                }
-            }
-
-            // 5. Corridors Shifting (Looking away swaps walls - Rarer)
+            // 4. Corridors Shifting (Looking away swaps walls - Rarer)
             if (Math.random() < 0.0015 * freqScale) {
                 attemptCorridorShift();
+            }
+
+            // 5. Creepy Footsteps behind when stopped
+            if (moveVector.x === 0 && moveVector.y === 0) {
+                timeSinceStopped += delta;
+                if (timeSinceStopped > 1.3 && fakeFootstepsPlayed < 3) {
+                    playFakeFootstep();
+                    fakeFootstepsPlayed++;
+                    timeSinceStopped = 0.7; // next steps trigger a bit faster
+                }
+            } else {
+                timeSinceStopped = 0;
+                fakeFootstepsPlayed = 0;
+            }
+
+            // 6. Audio Whisper Sweeps
+            if (Math.random() < 0.0018 * freqScale) {
+                playCreepyWhisper();
             }
         }
 
@@ -2487,22 +2610,54 @@
             appState.gameState = 'video';
             
             const bgm = document.getElementById('music-bgm');
-            if (bgm) bgm.pause();
+            if (bgm) {
+                try {
+                    bgm.pause();
+                } catch (e) {}
+            }
             
             const video = document.getElementById('scare-video');
+            const vhs = document.getElementById('vhs-screen');
+            
+            if (!video || !vhs) {
+                if (vhs) vhs.style.display = 'flex';
+                return;
+            }
+
             video.style.display = 'block';
+            video.playsInline = true;
+            video.muted = false;
+            video.volume = 1.0;
             
-            video.play().catch(err => {
-                console.log("Video playback blocked, attempting muted", err);
-                video.muted = true;
-                video.play().catch(e => console.error("Muted video play failed", e));
-            });
-            
-            video.addEventListener('ended', () => {
+            let transitioned = false;
+            const transitionToVhs = () => {
+                if (transitioned) return;
+                transitioned = true;
+                clearTimeout(fallbackTimeout);
+                try {
+                    video.pause();
+                } catch (e) {}
                 video.style.display = 'none';
-                const vhs = document.getElementById('vhs-screen');
                 vhs.style.display = 'flex';
-                sendMessage('gen_vibration', { duration: 1000 }, false);
+                sendMessage('gen_vibration', { duration: 1000 }, false).catch(() => {});
+            };
+
+            // Set dynamic fallback to protect against playback crashes/stalls
+            const fallbackTimeout = setTimeout(() => {
+                transitionToVhs();
+            }, 12500);
+
+            video.addEventListener('ended', transitionToVhs, { once: true });
+            video.addEventListener('error', () => {
+                transitionToVhs();
+            }, { once: true });
+
+            video.play().then(() => {
+                // Let the video run for its normal length then route automatically
+                setTimeout(transitionToVhs, 11000);
+            }).catch((err) => {
+                console.error("Fallback due to blocked video start", err);
+                transitionToVhs();
             });
         }
 
@@ -2527,7 +2682,7 @@
             }
 
             updatePlayerMovement(delta);
-            updateStalker(delta);
+            updateShadowEntity(delta);
             updateMindfucks(delta);
 
             renderer.render(scene, camera);
@@ -2589,14 +2744,10 @@
             // Reposition playerGroup
             playerGroup.position.set(0, 0, 0);
 
-            if (shadowFigure) {
-                scene.remove(shadowFigure);
-                shadowFigure = null;
-            }
-            shadowActive = false;
-
-            if (stalkerEntity) {
-                stalkerEntity.visible = false;
+            if (shadowMesh) {
+                shadowMesh.visible = false;
+                shadowIsSpotted = false;
+                shadowSpottedTime = 0;
             }
 
             // Rebuild levels dynamically
