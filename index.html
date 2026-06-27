@@ -1,0 +1,2734 @@
+<html lang="en" style="--col-amb: #020202; --col-torch: #ffffff; height: 100%; overscroll-behavior: contain; -webkit-touch-callout: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;"><head><style>*{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;}input,textarea,[contenteditable]{-webkit-user-select:text!important;user-select:text!important;}</style>
+<script>
+(function() {
+  if (typeof CustomEvent === 'function') return;
+  function CustomEvent(event, params) {
+    params = params || { bubbles: false, cancelable: false, detail: null };
+    var evt = document.createEvent('CustomEvent');
+    evt.initCustomEvent(event, params.bubbles, params.cancelable, params.detail);
+    return evt;
+  }
+  CustomEvent.prototype = window.Event && window.Event.prototype;
+  window.CustomEvent = CustomEvent;
+})();
+</script>
+
+<script>
+(function() {
+  // Function to set or update viewport meta tag
+  function ensureViewportMeta() {
+    var viewportMeta = document.querySelector('meta[name="viewport"]');
+    
+    if (!viewportMeta) {
+      // Create viewport meta tag if it doesn't exist
+      viewportMeta = document.createElement('meta');
+      viewportMeta.name = 'viewport';
+      document.head.insertBefore(viewportMeta, document.head.firstChild);
+    }
+    
+    // Set viewport to prevent iOS auto-zoom
+    // width=device-width: Use device width
+    // initial-scale=1.0: Initial zoom level
+    // maximum-scale=1.0: Prevent zooming beyond 1.0
+    // user-scalable=no: Disable user scaling (prevents pinch zoom and auto-zoom on input focus)
+    viewportMeta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+  }
+  
+  // Run immediately if DOM is already ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ensureViewportMeta);
+  } else {
+    ensureViewportMeta();
+  }
+  
+  // Also ensure it's set when head is ready (in case script runs before head)
+  if (!document.head) {
+    var observer = new MutationObserver(function(mutations) {
+      if (document.head) {
+        ensureViewportMeta();
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.documentElement, { childList: true });
+  }
+})();
+</script>
+
+<script>
+(function() {
+  var originalAddEventListener = EventTarget.prototype.addEventListener;
+  var originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+
+  // ── Tap vs Swipe detection ──
+  // Track pointerdown position; only synthesize click when displacement is small.
+  var ptrDownPos = null;
+  var TAP_THRESHOLD_SQ = 100; // 10px squared
+
+  originalAddEventListener.call(document, 'pointerdown', function(e) {
+    if (e.button !== 0) return;
+    ptrDownPos = { x: e.clientX, y: e.clientY };
+  }, { capture: true, passive: true });
+
+  function isTap(e) {
+    if (!ptrDownPos) return true; // no pointerdown recorded — be safe, treat as tap
+    var dx = e.clientX - ptrDownPos.x;
+    var dy = e.clientY - ptrDownPos.y;
+    return (dx * dx + dy * dy) <= TAP_THRESHOLD_SQ;
+  }
+
+  // ── click → pointerup conversion ──
+  var listenerMap = new WeakMap();
+
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (type === 'click' && typeof listener === 'function') {
+      var elementMap = listenerMap.get(this);
+      if (!elementMap) {
+        elementMap = new Map();
+        listenerMap.set(this, elementMap);
+      }
+
+      var existingPointerListener = elementMap.get(listener);
+      if (existingPointerListener) {
+        return originalAddEventListener.call(this, 'pointerup', existingPointerListener, options);
+      }
+
+      var pointerupListener = function(e) {
+        if (e.button !== 0) return;
+        if (!isTap(e)) return;
+
+        var clickEvent = new MouseEvent('click', {
+          bubbles: e.bubbles, cancelable: e.cancelable, view: e.view,
+          detail: 1,
+          screenX: e.screenX, screenY: e.screenY,
+          clientX: e.clientX, clientY: e.clientY,
+          ctrlKey: e.ctrlKey, altKey: e.altKey,
+          shiftKey: e.shiftKey, metaKey: e.metaKey,
+          button: e.button, relatedTarget: e.relatedTarget
+        });
+        Object.defineProperty(clickEvent, 'target', { value: e.target, enumerable: true });
+        Object.defineProperty(clickEvent, 'currentTarget', { value: e.currentTarget, enumerable: true });
+
+        try { listener.call(this, clickEvent); } catch (err) {}
+      };
+
+      elementMap.set(listener, pointerupListener);
+      return originalAddEventListener.call(this, 'pointerup', pointerupListener, options);
+    }
+
+    return originalAddEventListener.call(this, type, listener, options);
+  };
+
+  EventTarget.prototype.removeEventListener = function(type, listener, options) {
+    if (type === 'click' && typeof listener === 'function') {
+      var elementMap = listenerMap.get(this);
+      if (elementMap) {
+        var pointerupListener = elementMap.get(listener);
+        if (pointerupListener) {
+          elementMap.delete(listener);
+          return originalRemoveEventListener.call(this, 'pointerup', pointerupListener, options);
+        }
+      }
+    }
+    return originalRemoveEventListener.call(this, type, listener, options);
+  };
+
+  // ── Synthetic click for .onclick compatibility ──
+  // Only dispatch when the gesture is a tap (not a swipe).
+  var SEKAI_SYNTHETIC_KEY = '__sekai_sc';
+
+  originalAddEventListener.call(document, 'pointerup', function(e) {
+    if (e.button !== 0) return;
+    if (!isTap(e)) return;
+    var t = e.target;
+    if (!t || !t.dispatchEvent) return;
+
+    var evt = new MouseEvent('click', {
+      bubbles: true, cancelable: true, view: e.view,
+      detail: 1,
+      screenX: e.screenX, screenY: e.screenY,
+      clientX: e.clientX, clientY: e.clientY,
+      ctrlKey: e.ctrlKey, altKey: e.altKey,
+      shiftKey: e.shiftKey, metaKey: e.metaKey,
+      button: 0, relatedTarget: null
+    });
+    Object.defineProperty(evt, SEKAI_SYNTHETIC_KEY, { value: true });
+    t.dispatchEvent(evt);
+  }, false);
+
+  // Block browser-synthesized click events to prevent double-triggering.
+  originalAddEventListener.call(document, 'click', function(e) {
+    if (!e[SEKAI_SYNTHETIC_KEY]) {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+})();
+</script>
+
+<script>
+(function() {
+  // Track recent touch to block emulated mouse events
+  var lastTouchTime = 0;
+  var TOUCH_MOUSE_DELAY = 200; // ms to block mouse events after touch
+
+  // Global touch tracker - set flag when touch occurs
+  document.addEventListener('touchstart', function() {
+    lastTouchTime = Date.now();
+  }, { passive: true, capture: true });
+
+  document.addEventListener('touchend', function() {
+    lastTouchTime = Date.now();
+  }, { passive: true, capture: true });
+
+  // Block emulated mouse events that follow touch
+  // BUT allow them on focusable elements (inputs need mousedown for focus)
+  function blockEmulatedMouseHandler(e) {
+    if (Date.now() - lastTouchTime < TOUCH_MOUSE_DELAY) {
+      // Don't block on focusable elements - they need mousedown for focus
+      var target = e.target;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return; // Allow the event
+      }
+      e.stopPropagation();
+      // NOTE: Do NOT call preventDefault() here.
+      // CSS user-select:none already handles text selection prevention.
+      // On iOS WKWebView, mousedown.preventDefault() can intermittently
+      // suppress click event synthesis, breaking .onclick handlers.
+    }
+  }
+
+  // Capture phase blockers for emulated mouse events
+  document.addEventListener('mousedown', blockEmulatedMouseHandler, { capture: true });
+
+  // Patch addEventListener to force passive on touch events.
+  // Expose original globally so SCROLL_BLOCK_SCRIPT can register a
+  // non-passive touchmove handler to block iOS WKWebView parent scroll.
+  var originalAddEventListener = EventTarget.prototype.addEventListener;
+  window.__sekai_orig_ael = originalAddEventListener;
+
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    // Convert touchstart/touchmove to passive
+    // Mouse event emulation is handled by our global blockers above
+    if (type === 'touchstart' || type === 'touchmove') {
+      var newOptions = Object.assign({}, options || {}, { passive: true });
+      return originalAddEventListener.call(this, type, listener, newOptions);
+    }
+    return originalAddEventListener.call(this, type, listener, options);
+  };
+})();
+</script>
+
+<script>
+(function() {
+  // Track if dom_ready was already sent
+  var domReadySent = false;
+
+  function sendDomReady() {
+    if (domReadySent) return;
+    domReadySent = true;
+    window.parent.postMessage({ type: 'sekai_iframe_dom_ready' }, '*');
+  }
+
+  // Send dom_ready when DOMContentLoaded fires
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', sendDomReady);
+  } else {
+    // DOM already loaded
+    sendDomReady();
+  }
+
+  // Helper to serialize message - handles objects that would become [object Object]
+  function serializeMessage(msg) {
+    if (msg === null || msg === undefined) return '';
+    if (typeof msg === 'string') return msg;
+    if (typeof msg === 'object') {
+      try {
+        return JSON.stringify(msg);
+      } catch (e) {
+        return String(msg);
+      }
+    }
+    return String(msg);
+  }
+
+  // Catch JS errors and send to parent
+  window.onerror = function(message, source, lineno, colno, error) {
+    window.parent.postMessage({
+      type: 'sekai_iframe_js_error',
+      message: serializeMessage(message),
+      source: source || '',
+      lineno: lineno || 0,
+      colno: colno || 0,
+      errorName: error ? error.name : '',
+      errorStack: error ? error.stack : ''
+    }, '*');
+    // Return false to allow default error handling
+    return false;
+  };
+
+  // Also catch unhandled promise rejections
+  window.addEventListener('unhandledrejection', function(event) {
+    var reason = event.reason;
+    var isError = reason instanceof Error;
+    window.parent.postMessage({
+      type: 'sekai_iframe_js_error',
+      message: reason ? serializeMessage(reason) : 'Unhandled promise rejection',
+      source: 'unhandledrejection',
+      lineno: 0,
+      colno: 0,
+      errorName: isError ? reason.name : '',
+      errorStack: isError ? reason.stack : ''
+    }, '*');
+  });
+})();
+</script>
+
+<script>
+(function() {
+  // Collect all devicemotion listeners registered by game code
+  var deviceMotionListeners = [];
+
+  // Save original addEventListener
+  var originalAddEventListener = window.addEventListener;
+
+  // Intercept addEventListener to capture devicemotion listeners
+  window.addEventListener = function(type, listener, options) {
+    if (type === 'devicemotion' && typeof listener === 'function') {
+      deviceMotionListeners.push(listener);
+      // Also add to native in case permission is granted elsewhere
+      return originalAddEventListener.call(this, type, listener, options);
+    }
+    return originalAddEventListener.call(this, type, listener, options);
+  };
+
+  // Also intercept removeEventListener
+  var originalRemoveEventListener = window.removeEventListener;
+  window.removeEventListener = function(type, listener, options) {
+    if (type === 'devicemotion' && typeof listener === 'function') {
+      var index = deviceMotionListeners.indexOf(listener);
+      if (index !== -1) {
+        deviceMotionListeners.splice(index, 1);
+      }
+    }
+    return originalRemoveEventListener.call(this, type, listener, options);
+  };
+
+  // Listen for forwarded motion data from parent
+  window.addEventListener('message', function(event) {
+    if (!event.data || event.data.type !== '__sekai_device_motion__') return;
+
+    var data = event.data;
+
+    // Create a synthetic event-like object
+    var syntheticEvent = {
+      accelerationIncludingGravity: data.accelerationIncludingGravity,
+      acceleration: data.acceleration,
+      rotationRate: data.rotationRate,
+      interval: data.interval || 16,
+      // Make it look like a real event
+      type: 'devicemotion',
+      timeStamp: data.timestamp || Date.now(),
+      target: window,
+      currentTarget: window,
+      preventDefault: function() {},
+      stopPropagation: function() {},
+      stopImmediatePropagation: function() {}
+    };
+
+    // Trigger all registered listeners
+    deviceMotionListeners.forEach(function(listener) {
+      try {
+        listener(syntheticEvent);
+      } catch (e) {
+        // Ignore listener errors
+      }
+    });
+  });
+})();
+</script>
+
+<script>
+(function() {
+  // Track all AudioContexts created in this iframe
+  var audioContexts = [];
+  var originalAudioContext = window.AudioContext || window.webkitAudioContext;
+
+  if (originalAudioContext) {
+    // Patch AudioContext constructor to track instances and enforce initial mute state.
+    // If isMuted is true when the context is created, suspend it immediately so that
+    // AudioNode sources cannot produce audio before the parent sends receive_audio_mute.
+    // This closes the race window between iframe load start and the first mute message.
+    var PatchedAudioContext = function() {
+      var ctx = new originalAudioContext();
+      audioContexts.push(ctx);
+      // Per-ctx diagnostic flags. Each AudioContext instance warns at most
+      // once for each of the two diagnostics below, so a rAF-driven
+      // resume() loop (observed in real games) does not spam vconsole,
+      // while new contexts still act as fresh sentinels.
+      var resumeBlockWarned = false;
+      var browserResumeWarned = false;
+      if (typeof ctx.resume === 'function') {
+        var originalCtxResume = ctx.resume.bind(ctx);
+        ctx.resume = function() {
+          if (isMuted) {
+            // Game code attempted to resume AudioContext during mute window.
+            // Blocked here prevents the audibility observer from reporting a
+            // false playing_started. Logged once per ctx to confirm the
+            // "game code calls resume()" leak path is real.
+            if (!resumeBlockWarned) {
+              resumeBlockWarned = true;
+              try {
+                console.warn(
+                  '[sekai-iframe-audio] AudioContext.resume() blocked while muted (once per ctx)'
+                );
+              } catch (e) {}
+            }
+            return Promise.resolve();
+          }
+          return originalCtxResume();
+        };
+      }
+      if (isMuted) {
+        ctx.suspend().catch(function() {});
+      }
+      // Feed perf audibility observer: re-evaluate whenever the context
+      // transitions between suspended/running/closed. ctx.suspend()/resume()
+      // resolve asynchronously, so the statechange event is the only reliable
+      // signal that the context has actually moved.
+      try {
+        ctx.addEventListener('statechange', function() {
+          // Sentinel: resume() is blocked above while muted, so if the ctx
+          // still enters 'running' during mute, the only remaining cause is
+          // browser-initiated state recovery (e.g. iOS audio session
+          // interruption ending). If this log ever appears in practice, the
+          // resume() block alone is not enough — we must also guard
+          // notifyAudibilityChange() to suppress audible=true while muted.
+          // Logged once per ctx to avoid repeated warnings on oscillating
+          // state transitions.
+          if (ctx.state === 'running' && isMuted && !browserResumeWarned) {
+            browserResumeWarned = true;
+            try {
+              console.warn(
+                '[sekai-iframe-audio] AudioContext entered running while muted (browser-initiated, once per ctx)'
+              );
+            } catch (e) {}
+          }
+          scheduleAudibilityCheck();
+        });
+      } catch (e) {
+        // Ignore listener attach failures on non-conforming contexts
+      }
+      return ctx;
+    };
+    PatchedAudioContext.prototype = originalAudioContext.prototype;
+    window.AudioContext = PatchedAudioContext;
+    if (window.webkitAudioContext) {
+      window.webkitAudioContext = PatchedAudioContext;
+    }
+  }
+
+  // Track all Audio objects (including those created via new Audio())
+  var audioElements = [];
+  var originalAudio = window.Audio;
+  
+  function rememberMutedState(el) {
+    if (!el) return;
+    try {
+      if (!mutedElements.has(el)) {
+        mutedElements.set(el, !!el.muted);
+      }
+    } catch (e) {
+      // Ignore muted state snapshot failures
+    }
+  }
+
+  if (originalAudio) {
+    window.Audio = function(src) {
+      var audio = new originalAudio(src);
+      audioElements.push(audio);
+      if (isMuted) {
+        rememberMutedState(audio);
+        try { audio.muted = true; } catch (e) {}
+      }
+      return audio;
+    };
+    // Preserve prototype chain
+    window.Audio.prototype = originalAudio.prototype;
+  }
+
+  // Track video elements created via createElement
+  var videoElements = [];
+  var originalCreateElement = document.createElement;
+
+  document.createElement = function(tagName) {
+    var element = originalCreateElement.call(document, tagName);
+
+    // Track audio and video elements
+    if (typeof tagName === 'string') {
+      var tag = tagName.toLowerCase();
+      if (tag === 'audio') {
+        audioElements.push(element);
+        if (isMuted) {
+          rememberMutedState(element);
+          try { element.muted = true; } catch (e) {}
+        }
+      } else if (tag === 'video') {
+        videoElements.push(element);
+        if (isMuted) {
+          rememberMutedState(element);
+          try { element.muted = true; } catch (e) {}
+        }
+      }
+    }
+
+    return element;
+  };
+
+  // Track elements that are INTENDED to be playing (based on .play()/.pause() calls).
+  // This is more reliable than checking .paused at mute time, because iOS pauses
+  // audio elements when the app goes to background BEFORE our JS visibility handler
+  // runs — by the time muteAllAudio() is called, all elements are already paused
+  // by the OS and .paused === true for all of them.
+  var intendedPlaying = new Set();
+
+  if (window.HTMLMediaElement) {
+    var originalHTMLPlay = HTMLMediaElement.prototype.play;
+    var originalHTMLPause = HTMLMediaElement.prototype.pause;
+    var internalPause = false;
+
+    HTMLMediaElement.prototype.play = function() {
+      intendedPlaying.add(this);
+      if (isMuted) {
+        rememberMutedState(this);
+        try { this.muted = true; } catch (e) {}
+        try {
+          if (!this.paused) {
+            internalPause = true;
+            originalHTMLPause.call(this);
+          }
+        } catch (e) {
+          // Ignore pause failures while muted
+        } finally {
+          internalPause = false;
+        }
+        return Promise.resolve();
+      }
+      return originalHTMLPlay.apply(this, arguments);
+    };
+
+    HTMLMediaElement.prototype.pause = function() {
+      if (!internalPause) {
+        intendedPlaying.delete(this);
+      }
+      return originalHTMLPause.apply(this, arguments);
+    };
+  }
+
+  // Track elements queued for playback resume — retried on each user touchstart
+  // until all elements are playing again. More reliable than { once: true } because
+  // it survives cases where the first touch fires before unmuteAllAudio() processes
+  // the message (postMessage is async; user may touch the moment they switch back).
+  var pendingResume = [];
+
+  // Track muted state to restore correctly
+  var mutedElements = new WeakMap();
+  var isMuted = false;
+
+  function collectTrackedMediaElements() {
+    var elements = [];
+    var seen = new Set();
+
+    function pushElement(el) {
+      if (!el || seen.has(el)) return;
+      seen.add(el);
+      elements.push(el);
+    }
+
+    document.querySelectorAll('audio, video').forEach(pushElement);
+    audioElements.forEach(pushElement);
+    videoElements.forEach(pushElement);
+
+    return elements;
+  }
+
+  function pauseElementForMute(el) {
+    if (!el) return;
+
+    if (!el.paused && !el.ended) {
+      intendedPlaying.add(el);
+    }
+
+    try {
+      internalPause = true;
+      el.pause();
+    } finally {
+      internalPause = false;
+    }
+  }
+
+  function lockElementAudio(el) {
+    if (!el) return;
+    rememberMutedState(el);
+    pauseElementForMute(el);
+    try {
+      el.muted = true;
+    } catch (e) {
+      // Ignore mute failures for stale or invalid elements
+    }
+  }
+
+  function muteAllAudio() {
+    if (isMuted) return;
+    isMuted = true;
+    pendingResume = []; // Clear queued resumes — new mute cycle resets state
+
+    // Suspend all AudioContexts
+    audioContexts.forEach(function(ctx) {
+      if (ctx && ctx.state === 'running') {
+        ctx.suspend().catch(function() {});
+      }
+    });
+
+    // Pause first, then force mute so background playback cannot leak audio.
+    // The audibility observer below will automatically emit
+    // sekai_iframe_audio_playing_stopped once the pause/mute propagates, so
+    // we no longer post a separate sekai_iframe_audio_muted confirmation.
+    collectTrackedMediaElements().forEach(function(el) {
+      try {
+        lockElementAudio(el);
+      } catch (e) {
+        // Element might be stale or invalid
+      }
+    });
+  }
+
+  function resumeAllContexts() {
+    audioContexts.forEach(function(ctx) {
+      // Call resume() on any non-closed context, including 'running'.
+      // Reason: muteAllAudio() calls ctx.suspend(), which is async. If
+      // unmuteAllAudio() (or a touchstart retry) runs before suspend() resolves,
+      // ctx.state is still 'running' — the old suspended/interrupted-only guard
+      // would skip it, then suspend() resolves and the context stays permanently
+      // suspended. By calling resume() on 'running' contexts too, we queue a
+      // resume after the pending suspend, so both operations execute in order
+      // (suspend → resume) and the context ends up running as intended.
+      // resume() on an already-running context is a no-op per the Web Audio spec.
+      if (ctx && ctx.state !== 'closed') {
+        ctx.resume().catch(function() {});
+      }
+    });
+  }
+
+  function unmuteAllAudio() {
+    if (!isMuted) return;
+    isMuted = false;
+
+    // Resume all AudioContexts immediately (handles 'suspended' and 'interrupted')
+    resumeAllContexts();
+
+    // Restore tracked media elements to their original muted state.
+    collectTrackedMediaElements().forEach(function(el) {
+      var wasMuted = mutedElements.get(el);
+      if (wasMuted !== undefined) {
+        el.muted = wasMuted;
+      } else {
+        el.muted = false;
+      }
+    });
+    mutedElements = new WeakMap();
+
+    // Queue intended elements for playback resume.
+    // iOS pauses audio/video elements on app-switch before our JS handler runs,
+    // so simply unmuting is not enough — we must call .play() to restore.
+    // We populate pendingResume here; the persistent touchstart listener below
+    // retries on every user touch until all elements are playing again.
+    pendingResume = [];
+    intendedPlaying.forEach(function(el) {
+      if (!el || el.ended) return;
+      pendingResume.push(el);
+    });
+    // Also attempt immediately — succeeds on iOS versions / audio session states
+    // that allow .play() without a fresh user gesture.
+    pendingResume.forEach(function(el) {
+      try { if (el.paused) el.play().catch(function() {}); } catch(e) {}
+    });
+  }
+
+  // Persistent touchstart listener — fires on every user touch while unmuted.
+  // Retries AudioContext resume and HTML5 element .play() until all succeed.
+  // Registered once at script init using capture phase so game code stopPropagation
+  // cannot prevent it from running.
+  //
+  // Why persistent instead of { once: true }:
+  // - postMessage delivery is async; the user may touch before unmuteAllAudio()
+  //   processes the receive_audio_unmute message, consuming a { once: true } slot
+  // - iOS may reject .play() on the first attempt but allow it on subsequent ones
+  document.addEventListener('touchstart', function() {
+    if (isMuted) return;
+    // Retry AudioContexts on every touch (handles 'interrupted' / 'suspended')
+    resumeAllContexts();
+    // Retry HTML5 elements still waiting to resume
+    if (pendingResume.length === 0) return;
+    var toTry = pendingResume;
+    pendingResume = [];
+    toTry.forEach(function(el) {
+      try {
+        if (!el.paused) return; // Already playing — no action needed
+        el.play().catch(function() {
+          pendingResume.push(el); // Failed — retry on next touch
+        });
+      } catch(e) {
+        pendingResume.push(el);
+      }
+    });
+  }, { passive: true, capture: true });
+
+  function collectMediaFromNode(node) {
+    if (!node || node.nodeType !== 1) return [];
+    var elements = [];
+    if (node.tagName === 'AUDIO' || node.tagName === 'VIDEO') {
+      elements.push(node);
+    }
+    if (typeof node.querySelectorAll === 'function') {
+      node.querySelectorAll('audio, video').forEach(function(el) {
+        elements.push(el);
+      });
+    }
+    return elements;
+  }
+
+  document.addEventListener('play', function(event) {
+    if (!isMuted) return;
+    var target = event.target;
+    if (!target || typeof target.pause !== 'function') return;
+    lockElementAudio(target);
+  }, true);
+
+  document.addEventListener('playing', function(event) {
+    if (!isMuted) return;
+    var target = event.target;
+    if (!target || typeof target.pause !== 'function') return;
+    lockElementAudio(target);
+  }, true);
+
+  var mutationObserverTarget = document.documentElement || document;
+  if (typeof MutationObserver !== 'undefined' && mutationObserverTarget) {
+    var mediaMutationObserver = new MutationObserver(function(mutations) {
+      if (!isMuted) return;
+      mutations.forEach(function(mutation) {
+        mutation.addedNodes.forEach(function(node) {
+          collectMediaFromNode(node).forEach(function(el) {
+            lockElementAudio(el);
+          });
+        });
+      });
+    });
+    mediaMutationObserver.observe(mutationObserverTarget, {
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  // ========================================================================
+  // Audibility observer — parent-facing signal for feed perf dashboard.
+  //
+  // Fact measured: "is this iframe currently producing audible output?"
+  //   - Based on real <audio>/<video> element state and AudioContext state
+  //   - Not based on parent mute/unmute commands (those only state intent)
+  //
+  // Why this matters:
+  //   - "should have played but didn't" — card visible, no start event
+  //   - "played after it shouldn't" — audio duration > card visible duration
+  // Both failure modes are invisible from the parent side alone.
+  //
+  // Multi-cycle per card is supported naturally: every mute/unmute/tab
+  // switch/user action that flips real audibility emits a new event pair.
+  // ========================================================================
+  var lastAudibleState = false;
+  var audibilityCheckScheduled = false;
+
+  function isElementAudible(el) {
+    if (!el) return false;
+    try {
+      if (el.paused || el.ended || el.muted) return false;
+      var vol = typeof el.volume === 'number' ? el.volume : 1;
+      if (vol <= 0) return false;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function computeAudible() {
+    var elements = collectTrackedMediaElements();
+    for (var i = 0; i < elements.length; i++) {
+      if (isElementAudible(elements[i])) return true;
+    }
+    for (var j = 0; j < audioContexts.length; j++) {
+      var ctx = audioContexts[j];
+      if (ctx && ctx.state === 'running') return true;
+    }
+    return false;
+  }
+
+  function notifyAudibilityChange() {
+    var audible = computeAudible();
+    if (audible === lastAudibleState) return;
+    lastAudibleState = audible;
+    // Feed perf 采样门禁：父层已在注入时决定这轮是否上报。
+    // 状态位 lastAudibleState 仍然更新，保证后续 started/stopped 仍能配对。
+    if (window.__SEKAI_FEED_PERF_SAMPLED__ === false) return;
+    try {
+      window.parent.postMessage({
+        type: audible
+          ? 'sekai_iframe_audio_playing_started'
+          : 'sekai_iframe_audio_playing_stopped',
+        timestamp: Date.now(),
+      }, '*');
+    } catch (e) {
+      // Ignore postMessage failures (parent window may be gone)
+    }
+  }
+
+  // scheduleAudibilityCheck is also referenced from PatchedAudioContext's
+  // statechange listener above — hoisted function declaration resolves OK.
+  function scheduleAudibilityCheck() {
+    if (audibilityCheckScheduled) return;
+    audibilityCheckScheduled = true;
+    // Microtask: batch multiple synchronous state changes (e.g. mute pauses
+    // 3 elements + suspends 1 context in sequence) into a single notification.
+    Promise.resolve().then(function() {
+      audibilityCheckScheduled = false;
+      notifyAudibilityChange();
+    });
+  }
+
+  // Capture phase so game code calling stopPropagation cannot hide these.
+  // Only react to events from <audio> / <video> elements.
+  ['play', 'playing', 'pause', 'ended', 'volumechange', 'emptied'].forEach(function(evName) {
+    document.addEventListener(evName, function(event) {
+      var target = event.target;
+      var tag = target && target.tagName;
+      if (tag !== 'AUDIO' && tag !== 'VIDEO') return;
+      scheduleAudibilityCheck();
+    }, true);
+  });
+
+  window.addEventListener('message', function(event) {
+    if (!event.data) return;
+
+    if (event.data.type === 'receive_audio_mute' ||
+        (event.data.origin === 'sekai_gaming_iframe_api' && event.data.type === 'receive_audio_mute')) {
+      muteAllAudio();
+    }
+
+    if (event.data.type === 'receive_audio_unmute' ||
+        (event.data.origin === 'sekai_gaming_iframe_api' && event.data.type === 'receive_audio_unmute')) {
+      unmuteAllAudio();
+    }
+  });
+})();
+</script>
+
+<script>
+(function() {
+  var ORIGIN = 'sekai_gaming_iframe_api';
+
+  // --- Shared helper: find <audio> elements by URL and set volume ---
+  function applyVolumeByUrl(url, volume) {
+    if (!url) return;
+    var vol = Math.max(0, Math.min(1, Number(volume)));
+    if (isNaN(vol)) return;
+    document.querySelectorAll('audio').forEach(function(el) {
+      var src = el.src || el.currentSrc || '';
+      if (src === url) {
+        el.volume = vol;
+      }
+    });
+  }
+
+  // --- Initial volume on game load ---
+  // Reads window.sekaiEditable (written into the HTML by the backend) and applies
+  // any volume values to matching <audio> elements. The LLM-generated game code
+  // does not read the volume field, so we apply it here.
+  function applyInitialVolumes() {
+    var meta = window.sekaiEditable;
+    if (!meta) return;
+    var items = (meta.music || []).concat(meta.sfx || []);
+    items.forEach(function(item) {
+      if (item.value && item.volume !== undefined && item.volume !== null) {
+        applyVolumeByUrl(item.value, item.volume);
+      }
+    });
+  }
+
+  // Run as soon as DOM is parsed, then retry after short delays to catch
+  // audio elements created during game initialization (e.g. after DOMContentLoaded).
+  if (document.readyState !== 'loading') {
+    applyInitialVolumes();
+  } else {
+    document.addEventListener('DOMContentLoaded', applyInitialVolumes);
+  }
+  setTimeout(applyInitialVolumes, 500);
+  setTimeout(applyInitialVolumes, 1500);
+
+  // --- Real-time volume control (postMessage from editor) ---
+  window.addEventListener('message', function(event) {
+    var data = event.data;
+    if (!data || data.origin !== ORIGIN) return;
+
+    var payload = data.data;
+    if (!payload) return;
+
+    if (data.type === 'set_audio_volume') {
+      // Real-time drag path: LLM code never sees this type
+      applyVolumeByUrl(payload.url, payload.volume);
+    } else if (data.type === 'apply_change' && payload.volume !== undefined && payload.volume !== null) {
+      // Commit path (on release): runs before LLM handler via capture phase
+      applyVolumeByUrl(payload.value, payload.volume);
+    }
+  }, true); // capture phase — runs before LLM game code
+})();
+</script>
+
+<script>
+(function() {
+  var ORIGIN = 'sekai_gaming_iframe_api';
+
+  // Handle the font data URL response from the parent window.
+  // The parent fetched the font bytes and encoded them as a base64 data URL
+  // so we can inject @font-face without any cross-origin network request.
+  window.addEventListener('message', function(event) {
+    var msg = event.data;
+    if (!msg || msg.type !== 'sekai_font_data_response') return;
+
+    var prevStyle = document.getElementById('sekai-font-' + msg.itemId);
+    if (prevStyle) prevStyle.parentNode.removeChild(prevStyle);
+
+    var style = document.createElement('style');
+    style.id = 'sekai-font-' + msg.itemId;
+    // font-weight range covers all weights so we don't need per-weight rules.
+    style.textContent = "@font-face { font-family: '" + msg.family + "'; src: url('" + msg.dataUrl + "'); font-weight: 100 900; }";
+    document.head.appendChild(style);
+
+    if (msg.cssVar) {
+      document.documentElement.style.setProperty(msg.cssVar, "'" + msg.family + "'");
+    }
+  });
+
+  window.addEventListener('message', function(event) {
+    var data = event.data;
+    if (!data || data.origin !== ORIGIN) return;
+    if (data.type !== 'apply_change') return;
+
+    var payload = data.data;
+    if (!payload || !payload.value) return;
+
+    var meta = window.sekaiEditable;
+    if (!meta) return;
+
+    // --- Font handling ---
+    // No type guard — LLM-generated sekaiEditable often omits the type field.
+    if (meta.fonts) {
+      for (var i = 0; i < meta.fonts.length; i++) {
+        var font = meta.fonts[i];
+        if (font.id === payload.id) {
+          // Update sekaiEditable synchronously so get_current_html saves the new value.
+          font.value = payload.value;
+          if (payload.name) font.name = payload.name;
+          // Ask the parent to fetch and return the font as a data URL.
+          // Avoids WKWebView blob-iframe CORS restrictions on external font fetches.
+          window.parent.postMessage({
+            type: 'sekai_request_font_data',
+            itemId: font.id,
+            fontUrl: payload.value,
+            family: font.fallback || ('sekai-swap-' + font.id),
+            cssVar: font.cssVar || null,
+          }, '*');
+          return;
+        }
+      }
+    }
+
+    // --- Model handling ---
+    if (meta.models) {
+      for (var j = 0; j < meta.models.length; j++) {
+        var model = meta.models[j];
+        if (model.id === payload.id) {
+          // Update sekaiEditable so get_current_html saves the new value.
+          model.value = payload.value;
+          if (payload.name) model.name = payload.name;
+          return;
+        }
+      }
+    }
+  }, true); // capture phase — runs before LLM apply_change handler
+})();
+</script>
+
+<script>
+(function() {
+  // Set styles to contain scroll and prevent propagation to parent
+  // CRITICAL: touch-action:none is the PRIMARY scroll blocker - it's handled by the compositor
+  // without waiting for JS, preventing WebView freezes during rapid swipes
+  var style = document.createElement('style');
+  style.textContent = 'html,body{overscroll-behavior:contain!important;height:100%!important;-webkit-user-select:none!important;user-select:none!important;touch-action:none!important;}';
+  document.head.appendChild(style);
+
+  var scrollableTarget = null;
+  var touchStartY = 0;
+
+  function findScrollableAncestor(el) {
+    while (el && el !== document.body && el !== document.documentElement) {
+      var cs = window.getComputedStyle(el);
+      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  document.addEventListener('touchstart', function(e) {
+    if (e.touches.length !== 1) {
+      scrollableTarget = null;
+      return;
+    }
+
+    touchStartY = e.touches[0].clientY;
+    scrollableTarget = findScrollableAncestor(e.target);
+
+    if (scrollableTarget) {
+      scrollableTarget.style.touchAction = 'pan-y';
+    }
+  }, { passive: true, capture: true });
+
+  var resetScrollState = function() {
+    if (scrollableTarget) {
+      scrollableTarget.style.touchAction = '';
+      scrollableTarget = null;
+    }
+  };
+
+  document.addEventListener('touchend', resetScrollState, { passive: true, capture: true });
+  document.addEventListener('touchcancel', resetScrollState, { passive: true, capture: true });
+
+  // iOS WKWebView fix: CSS touch-action:none inside an iframe does NOT
+  // prevent the parent WebView scroll container from scrolling. A single
+  // non-passive touchmove handler with preventDefault() is the only
+  // reliable cross-iframe scroll blocker on iOS.
+  // Uses the original addEventListener saved by TOUCH_LISTENER_PATCH_SCRIPT
+  // to bypass the passive-force patch applied to game code listeners.
+  var origAel = window.__sekai_orig_ael;
+  if (origAel) {
+    origAel.call(document, 'touchmove', function(e) {
+      if (e.touches.length !== 1 || !e.cancelable) return;
+
+      if (!scrollableTarget) {
+        e.preventDefault();
+        return;
+      }
+
+      var st = scrollableTarget;
+      var atTop = st.scrollTop <= 0;
+      var atBottom = st.scrollTop >= st.scrollHeight - st.clientHeight - 1;
+      var currentY = e.touches[0].clientY;
+
+      if ((atTop && atBottom) ||
+          (atTop && currentY > touchStartY) ||
+          (atBottom && currentY < touchStartY)) {
+        e.preventDefault();
+      }
+    }, { passive: false, capture: true });
+  }
+
+  // Notify parent when input is focused (for keyboard handling)
+  document.addEventListener('focusin', function(e) {
+    var t = e.target;
+    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) {
+      window.parent.postMessage({ type: 'iframe-focusin' }, '*');
+    }
+  }, true);
+
+  document.addEventListener('focusout', function(e) {
+    var t = e.target;
+    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) {
+      // Check if focus is moving to another focusable element (input switching)
+      // If so, don't send focusout - the keyboard stays open
+      var related = e.relatedTarget;
+      if (related && (related.tagName === 'INPUT' || related.tagName === 'TEXTAREA' || related.isContentEditable)) {
+        return; // Skip focusout when switching between inputs
+      }
+      window.parent.postMessage({ type: 'iframe-focusout' }, '*');
+    }
+  }, true);
+})();
+</script><style>html,body{overscroll-behavior:contain!important;height:100%!important;-webkit-user-select:none!important;user-select:none!important;touch-action:none!important;}</style>
+
+<script>
+(function() {
+  var viewportStyle = document.createElement('style');
+  viewportStyle.id = 'sekai-viewport-style';
+  document.head.appendChild(viewportStyle);
+
+  var currentHeight = null;
+
+  function applyHeight(height) {
+    if (height === currentHeight) return;
+    currentHeight = height;
+
+    var transition = 'transition: height 0.25s cubic-bezier(0.32, 0, 0.68, 1) !important;';
+
+    if (typeof height === 'number' && height > 0) {
+      viewportStyle.textContent =
+        ':root { --sekai-viewport-height: ' + height + 'px; }' +
+        'html { height: ' + height + 'px !important; overflow: hidden !important; ' + transition + ' }' +
+        'body { height: ' + height + 'px !important; overflow: hidden !important; ' + transition + ' }';
+    } else {
+      viewportStyle.textContent =
+        ':root { --sekai-viewport-height: 100%; }' +
+        'html { height: 100% !important; overflow: hidden !important; }' +
+        'body { height: 100% !important; overflow: hidden !important; }';
+    }
+  }
+
+  window.addEventListener('message', function(event) {
+    if (event.data && event.data.type === 'viewport_height_change') {
+      var height = typeof event.data.height === 'number' ? event.data.height : null;
+      applyHeight(height);
+    }
+  });
+
+  // Notify parent that viewport handler is ready (handshake)
+  window.parent.postMessage({ type: 'viewport_ready' }, '*');
+})();
+</script><style id="sekai-viewport-style"></style>
+
+<script>
+(function() {
+  var touchStartY = null;
+  var lastSentTime = 0;
+  var SWIPE_THRESHOLD = 100;
+  var DEBOUNCE_MS = 500; // Prevent multiple events from single swipe
+
+  document.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 1) {
+      touchStartY = e.touches[0].clientY;
+    }
+  }, { passive: true, capture: true });
+
+  document.addEventListener('touchend', function(e) {
+    if (touchStartY !== null && e.changedTouches.length === 1) {
+      var now = Date.now();
+      var deltaY = touchStartY - e.changedTouches[0].clientY;
+      var timeSinceLast = now - lastSentTime;
+      // Only send if above threshold AND not within debounce window
+      if (deltaY >= SWIPE_THRESHOLD && timeSinceLast >= DEBOUNCE_MS) {
+        lastSentTime = now;
+        window.parent.postMessage({
+          type: 'sekai_iframe_swipe_up',
+          deltaY: deltaY,
+          timestamp: now
+        }, '*');
+      }
+    }
+    touchStartY = null;
+  }, { passive: true, capture: true });
+
+  document.addEventListener('touchcancel', function() {
+    touchStartY = null;
+  }, { passive: true, capture: true });
+})();
+</script>
+
+<script>
+(function() {
+
+  function urlToBase64(url) {
+    return fetch(url)
+      .then(function(res) { return res.blob(); })
+      .then(function(blob) {
+        return new Promise(function(resolve) {
+          var reader = new FileReader();
+          reader.onload = function() { resolve(reader.result); };
+          reader.readAsDataURL(blob);
+        });
+      })
+      .catch(function() { return null; });
+  }
+
+  function inlineImages(doc) {
+    var imgs = Array.prototype.slice.call(doc.querySelectorAll('img[src]'));
+    return Promise.all(imgs.map(function(img) {
+      return urlToBase64(img.src).then(function(base64) {
+        if (base64) img.setAttribute('src', base64);
+      });
+    }));
+  }
+
+  function inlineCssUrls(css, baseUrl) {
+    var urlPattern = /url(s*([^)]+)s*)/g;
+    var matches = [];
+    var match;
+    while ((match = urlPattern.exec(css)) !== null) {
+      var url = match[1].trim().replace(/^['"]|['"]$/g, '');
+      if (!url.startsWith('data:') && !url.startsWith('#')) {
+        matches.push({ full: match[0], url: url });
+      }
+    }
+    if (matches.length === 0) return Promise.resolve(css);
+
+    return Promise.all(matches.map(function(m) {
+      var resolved;
+      try { resolved = new URL(m.url, baseUrl).href; } catch(e) { return Promise.resolve(null); }
+      return urlToBase64(resolved).then(function(base64) {
+        return base64 ? { original: m.full, replacement: 'url(' + base64 + ')' } : null;
+      });
+    })).then(function(results) {
+      results.forEach(function(r) {
+        if (r) css = css.split(r.original).join(r.replacement);
+      });
+      return css;
+    });
+  }
+
+  function inlineStylesheets(doc) {
+    var links = Array.prototype.slice.call(doc.querySelectorAll('link[rel="stylesheet"]'));
+    return Promise.all(links.map(function(link) {
+      var href = link.href;
+      return fetch(href)
+        .then(function(res) { return res.text(); })
+        .then(function(css) { return inlineCssUrls(css, href); })
+        .then(function(css) {
+          var style = doc.createElement('style');
+          style.textContent = css;
+          link.parentNode.replaceChild(style, link);
+        })
+        .catch(function() {});
+    }));
+  }
+
+  function captureFullSnapshot() {
+    var cloned = document.documentElement.cloneNode(true);
+    var tempDoc = document.implementation.createHTMLDocument('');
+    tempDoc.documentElement.replaceWith(cloned);
+
+    // Remove all script tags so the snapshot is a frozen DOM state —
+    // not a re-playable game. Without this, opening the file re-runs
+    // all scripts and resets the game, destroying the captured state.
+    var scripts = Array.prototype.slice.call(tempDoc.querySelectorAll('script'));
+    scripts.forEach(function(s) { s.parentNode.removeChild(s); });
+
+    return Promise.all([
+      inlineImages(tempDoc),
+      inlineStylesheets(tempDoc),
+    ]).then(function() {
+      return '<!DOCTYPE html>' + tempDoc.documentElement.outerHTML;
+    });
+  }
+
+  var _runtimeErrors = [];
+
+  window.addEventListener('error', function(e) {
+    _runtimeErrors.push({
+      type: 'error',
+      message: e.message,
+      source: e.filename,
+      line: e.lineno,
+      col: e.colno,
+      stack: e.error ? e.error.stack : null,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(e) {
+    _runtimeErrors.push({
+      type: 'unhandledrejection',
+      message: e.reason instanceof Error ? e.reason.message : String(e.reason),
+      stack: e.reason instanceof Error ? e.reason.stack : null,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // 监听来自父页面的指令
+  window.addEventListener('message', function(e) {
+    if (!e.data || e.data.type !== 'TAKE_SNAPSHOT') return;
+
+    captureFullSnapshot().then(function(html) {
+      window.parent.postMessage({
+        type: 'SNAPSHOT_RESULT',
+        payload: {
+          html: html,
+          errors: _runtimeErrors.slice(),
+        }
+      }, '*');
+    });
+  });
+
+})();
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Hallway of Traps</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+    
+    <!-- Audio Unlock Script for iOS -->
+    <script>
+    (function() {
+        let audioUnlocked = false;
+        function unlockAudioContext() {
+            if (audioUnlocked) return;
+            if ('audioSession' in window.navigator) {
+                window.navigator.audioSession.type = "playback";
+            }
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) {
+                    const context = new AudioContext();
+                    if (context.state === 'suspended') context.resume();
+                    const buffer = context.createBuffer(1, 1, 22050);
+                    const source = context.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(context.destination);
+                    source.start(0);
+                }
+            } catch (e) {}
+            try {
+                const audio = new Audio();
+                audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+                audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(() => {});
+            } catch (e) {}
+            audioUnlocked = true;
+        }
+        window.addEventListener('message', function(event) {
+            if (event.data?.origin === 'sekai_gaming_iframe_api' && event.data?.type === 'receive_audio_unlock') {
+                unlockAudioContext();
+            }
+        });
+        ['touchstart', 'touchend', 'mousedown', 'click', 'keydown'].forEach(function(event) {
+            document.addEventListener(event, unlockAudioContext, { once: true });
+        });
+    })();
+    </script>
+
+    <!-- Snapdom for Share -->
+    <script type="module">
+        import { snapdom } from 'https://cdn.jsdelivr.net/npm/@zumer/snapdom@2.0.2/+esm';
+        window.snapdom = snapdom;
+    </script>
+
+    <!-- Three.js Import Map -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.180.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.180.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --col-amb: #1a1a1a;
+            --col-torch: #ffffff;
+            --key-r: #ff2222;
+            --key-g: #22ff22;
+            --key-b: #2222ff;
+            --palace-gold: #aa0000;
+        }
+        html, body {
+            width: 100%; height: 100%;
+            margin: 0; padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            touch-action: none; /* Prevent browser scrolling */
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        
+        #game-container {
+            width: 100%; height: 100%;
+            position: relative;
+        }
+
+        #three-canvas {
+            width: 100%; height: 100%;
+            display: block;
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 40;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        /* Touch Zones */
+        #touch-zones {
+            position: absolute;
+            inset: 0;
+            z-index: 30;
+            display: flex;
+        }
+        #zone-move {
+            width: 50%; height: 100%;
+            touch-action: none;
+        }
+        #zone-look {
+            width: 50%; height: 100%;
+            touch-action: none;
+        }
+
+        /* Virtual Joystick Visuals */
+        #joystick-base {
+            position: absolute;
+            width: 100px; height: 100px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            display: none;
+            pointer-events: none;
+            z-index: 35;
+        }
+        #joystick-nub {
+            position: absolute;
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.5);
+            transform: translate(-50%, -50%);
+            display: none;
+            pointer-events: none;
+            z-index: 36;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 4px; height: 4px;
+            background: white;
+            border-radius: 50%;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* Screens */
+        .screen-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.92);
+            backdrop-filter: blur(12px);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease, visibility 0.4s;
+        }
+        .screen-overlay.visible {
+            visibility: visible;
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #991b1b, #450a0a);
+            color: white;
+            font-family: monospace;
+            font-weight: bold;
+            letter-spacing: 0.1em;
+            padding: 1rem 2rem;
+            border-radius: 0.5rem;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            font-size: 1rem;
+            margin-top: 1.5rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+            transition: transform 0.1s, opacity 0.2s;
+            touch-action: manipulation;
+        }
+        .btn-primary:active { transform: scale(0.95); opacity: 0.9; }
+        .btn-primary:disabled { opacity: 0.5; filter: grayscale(1); transform: none; }
+
+        /* Share Zone specific styling */
+        #share-zone {
+            background: #000;
+            border: 1px solid #330000;
+            border-radius: 0.5rem;
+            padding: 2rem;
+            text-align: center;
+            width: 85%;
+            max-width: 320px;
+            position: relative;
+            overflow: hidden;
+        }
+        #share-zone::before {
+            content: ''; position: absolute; inset: 0;
+            background: radial-gradient(circle at center, rgba(153, 27, 27, 0.15) 0%, transparent 80%);
+            pointer-events: none;
+        }
+        @keyframes glitchText {
+            0% { transform: skew(0deg); }
+            80% { transform: skew(0deg); }
+            85% { transform: skew(10deg) scaleY(1.2); }
+            90% { transform: skew(-15deg) scaleY(0.8); }
+            95% { transform: skew(0deg); }
+            100% { transform: skew(0deg); }
+        }
+    </style>
+<style>*, ::before, ::after{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/* ! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com */*,::after,::before{box-sizing:border-box;border-width:0;border-style:solid;border-color:#e5e7eb}::after,::before{--tw-content:''}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;tab-size:4;font-family:ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0;padding:0}legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}.pointer-events-none{pointer-events:none}.pointer-events-auto{pointer-events:auto}.absolute{position:absolute}.inset-0{inset:0px}.mb-2{margin-bottom:0.5rem}.mb-6{margin-bottom:1.5rem}.mt-6{margin-top:1.5rem}.flex{display:flex}.w-64{width:16rem}.w-full{width:100%}.touch-manipulation{touch-action:manipulation}.select-none{-webkit-user-select:none;user-select:none}.flex-col{flex-direction:column}.items-center{align-items:center}.justify-center{justify-content:center}.gap-2{gap:0.5rem}.gap-3{gap:0.75rem}.rounded-full{border-radius:9999px}.border{border-width:1px}.border-red-900\/60{border-color:rgb(127 29 29 / 0.6)}.bg-black{--tw-bg-opacity:1;background-color:rgb(0 0 0 / var(--tw-bg-opacity, 1))}.bg-black\/40{background-color:rgb(0 0 0 / 0.4)}.bg-red-950\/0{background-color:rgb(69 10 10 / 0)}.py-3{padding-top:0.75rem;padding-bottom:0.75rem}.font-mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}.text-2xl{font-size:1.5rem;line-height:2rem}.text-4xl{font-size:2.25rem;line-height:2.5rem}.text-5xl{font-size:3rem;line-height:1}.text-sm{font-size:0.875rem;line-height:1.25rem}.text-xs{font-size:0.75rem;line-height:1rem}.font-black{font-weight:900}.font-bold{font-weight:700}.uppercase{text-transform:uppercase}.tracking-wider{letter-spacing:0.05em}.tracking-widest{letter-spacing:0.1em}.text-gray-400{--tw-text-opacity:1;color:rgb(156 163 175 / var(--tw-text-opacity, 1))}.text-gray-500{--tw-text-opacity:1;color:rgb(107 114 128 / var(--tw-text-opacity, 1))}.text-red-400{--tw-text-opacity:1;color:rgb(248 113 113 / var(--tw-text-opacity, 1))}.text-red-500{--tw-text-opacity:1;color:rgb(239 68 68 / var(--tw-text-opacity, 1))}.text-red-600{--tw-text-opacity:1;color:rgb(220 38 38 / var(--tw-text-opacity, 1))}.text-red-700{--tw-text-opacity:1;color:rgb(185 28 28 / var(--tw-text-opacity, 1))}.opacity-0{opacity:0}.drop-shadow-lg{--tw-drop-shadow:drop-shadow(0 10px 8px rgb(0 0 0 / 0.04)) drop-shadow(0 4px 3px rgb(0 0 0 / 0.1));filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}.transition{transition-property:color, background-color, border-color, fill, stroke, opacity, box-shadow, transform, filter, -webkit-text-decoration-color, -webkit-backdrop-filter;transition-property:color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;transition-property:color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter, -webkit-text-decoration-color, -webkit-backdrop-filter;transition-timing-function:cubic-bezier(0.4, 0, 0.2, 1);transition-duration:150ms}.transition-all{transition-property:all;transition-timing-function:cubic-bezier(0.4, 0, 0.2, 1);transition-duration:150ms}.transition-opacity{transition-property:opacity;transition-timing-function:cubic-bezier(0.4, 0, 0.2, 1);transition-duration:150ms}.duration-300{transition-duration:300ms}.hover\:bg-red-950\/20:hover{background-color:rgb(69 10 10 / 0.2)}.active\:scale-95:active{--tw-scale-x:.95;--tw-scale-y:.95;transform:translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}</style><style>
+    * {
+      -webkit-touch-callout: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+      touch-action: manipulation !important;
+      -webkit-tap-highlight-color: transparent !important;
+    }
+
+    /* Additional iOS magnifier prevention for text elements */
+    input, textarea, [contenteditable] {
+      -webkit-touch-callout: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+    }
+
+    /* Prevent long-press magnifier on canvas (common in games) */
+    canvas {
+      -webkit-touch-callout: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+      touch-action: manipulation !important;
+    }
+  </style></head>
+<body style="-webkit-user-select: none; height: 100%; overscroll-behavior: contain; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;">
+
+    <!-- Hidden audio elements for editable metadata -->
+    <audio id="music-bgm" loop="" src="https://prod-data.sekai.chat/aiu-bgm/auto/f20d47b45a52e1c3d3b1df1d193b60cf.mp3"></audio>
+    <audio id="sfx-lose" src="https://prod-data.sekai.chat/aiu-music-sfx/39/emergency_elevator_open_door_with_key_maximum_security_01_4188787e0b67b75f5c46f6b45046c118.mp3"></audio>
+
+    <div id="game-container">
+        <!-- WebGL Canvas -->
+        <canvas id="three-canvas" data-engine="three.js r180" width="576" height="880" style="width: 384px; height: 587px;"></canvas>
+
+        <!-- Touch Controls -->
+        <div id="touch-zones">
+            <div id="zone-move"></div>
+            <div id="zone-look"></div>
+        </div>
+
+        <div id="joystick-base" style="left: 61.333332px; top: 530px; display: none;"></div>
+        <div id="joystick-nub" style="left: 61.333332px; top: 490px; display: none;"></div>
+
+        <!-- Atmospheric Vignette / Screen Glitch Overlay -->
+        <div id="glitch-overlay" class="absolute inset-0 bg-red-950/0 pointer-events-none z-45 transition-all duration-300 flex flex-col items-center justify-center">
+            <div id="glitch-noise" class="absolute inset-0 opacity-0 pointer-events-none bg-black" style="background-image: repeating-linear-gradient(0deg, rgba(255, 0, 0, 0.15) 0px, rgba(255, 0, 0, 0.15) 1px, transparent 1px, transparent 2px); transition: opacity 0.1s;"></div>
+            <div id="glitch-text" class="text-red-700 font-mono text-4xl font-black tracking-widest uppercase opacity-0 transition-opacity duration-300 select-none">W A K E  U P</div>
+        </div>
+
+        <!-- Immersive HUD (Only Crosshair Dot) -->
+        <div id="ui-layer">
+            <div id="crosshair"></div>
+            <!-- Central Copy Button -->
+            
+        </div>
+
+        <!-- Glitch video and VHS screen overlay -->
+        <video id="scare-video" src="https://prod-data.sekai.chat/v3-games/chat-creation/eac54441-d110-476e-8384-75988ae24be8.mov" playsinline="" style="display:none; position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:100;"></video>
+        <div id="vhs-screen" style="display:none; position:absolute; inset:0; width:100%; height:100%; background:black; color:#00ff00; font-family:monospace; font-size:48px; justify-content:center; align-items:center; z-index:101; flex-direction:column; text-shadow: 0 0 10px #00ff00;">
+            <div style="font-size: 80px; letter-spacing: 10px; margin-bottom: 20px; animation: glitchText 1s infinite alternate;">: )</div>
+            <div style="font-size: 14px; color: #555; letter-spacing: 2px;">VHS FEED PLAYBACK ENDED</div>
+        </div>
+
+        <!-- Glitch / Wake Up / Reset Screen -->
+        <div id="result-screen" class="screen-overlay">
+            <div id="share-zone">
+                <h1 id="result-title" class="text-2xl font-black mb-2 text-red-600 tracking-wider font-mono">LOOP FAILED</h1>
+                <p id="result-subtitle" class="text-gray-400 mb-6 font-mono text-xs">Reality has collapsed. Restarting sequence...</p>
+                <div class="text-5xl font-black text-red-500 drop-shadow-lg mb-2" id="result-time">0s</div>
+                <div class="text-xs text-gray-500 uppercase tracking-widest font-bold font-mono">Time Spent in Labyrinth</div>
+            </div>
+
+            <div class="flex flex-col gap-3 mt-6 w-64">
+                <button id="btn-share" class="btn-primary w-full flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-share-nodes"></i> Share Panicked State
+                </button>
+                <button id="btn-retry" class="w-full py-3 rounded-full border border-red-900/60 text-red-400 font-mono text-sm font-bold bg-black/40 hover:bg-red-950/20 transition active:scale-95 touch-manipulation">
+                    <i class="fa-solid fa-rotate-right"></i> Re-Enter Loop
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Logic -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        // ==========================================
+        // STATE & METADATA
+        // ==========================================
+        window.appState = {
+            config: {
+                playerSpeed: 1.5,
+                scareFrequency: 0.5
+            },
+            gameState: 'ready',
+            startTime: 0,
+            scoreTime: 0
+        };
+
+        window.sekaiEditable = {
+  "tune": [
+    {
+      "id": "playerSpeed",
+      "label": "Move Speed",
+      "type": "slider",
+      "min": 0.5,
+      "max": 3,
+      "step": 0.1,
+      "value": 1.5,
+      "path": "appState.config.playerSpeed"
+    },
+    {
+      "id": "scareFrequency",
+      "label": "Scare Frequency",
+      "type": "slider",
+      "min": 0.1,
+      "max": 1.0,
+      "step": 0.1,
+      "value": 0.5,
+      "path": "appState.config.scareFrequency"
+    }
+  ],
+  "images": [
+    {
+      "id": "texWall",
+      "label": "Wall Texture",
+      "type": "image",
+      "value": "https://prod-data.sekai.chat/aiu-asset-image/import/auto/a0964f6acf40e3e5295a1442b1ce08a4.jpg",
+      "description": "dark concrete industrial wall dirty"
+    },
+    {
+      "id": "texFloor",
+      "label": "Floor Texture",
+      "type": "image",
+      "value": "https://prod-data.sekai.chat/aiu-asset-image/import/auto/be63dc49cdde7b1264d3f4f41d5526b9.jpg",
+      "description": "dark damp concrete floor"
+    }
+  ],
+  "models": [
+    {
+        "id": "stalker_model",
+        "label": "Stalker Entity",
+        "type": "model",
+        "value": "https://prod-data.sekai.chat/v3-games/chat-creation/models/a5d90585-336f-47fe-a22d-ab7b1d91f027.glb",
+        "name": "Bacteria",
+        "description": "creepy elongated creature bacteria",
+        "selector": "#stalker-model"
+    }
+  ],
+  "videos": [],
+  "music": [
+    {
+      "id": "bgm",
+      "label": "Horror Ambiance",
+      "type": "audio",
+      "value": "https://prod-data.sekai.chat/aiu-bgm/auto/f20d47b45a52e1c3d3b1df1d193b60cf.mp3",
+      "name": "Heavy Breathing",
+      "description": "dark horror ambient tension",
+      "selector": "#music-bgm",
+      "volume": 0.6
+    }
+  ],
+  "sfx": [
+    {
+      "id": "sfxScare",
+      "label": "Glitch Jumpscare",
+      "type": "audio",
+      "value": "https://prod-data.sekai.chat/aiu-music-sfx/39/emergency_elevator_open_door_with_key_maximum_security_01_4188787e0b67b75f5c46f6b45046c118.mp3",
+      "name": "Jumpscare Metal Clang",
+      "description": "scary loud metallic scream hit sound effect",
+      "selector": "#sfx-lose"
+    }
+  ],
+  "colors": [
+    {
+      "id": "ambient",
+      "label": "Ambient Mood",
+      "type": "color",
+      "value": "#020202",
+      "cssVar": "--col-amb"
+    },
+    {
+      "id": "torch",
+      "label": "Flashlight",
+      "type": "color",
+      "value": "#ffffff",
+      "cssVar": "--col-torch"
+    }
+  ],
+  "text": [
+    {
+      "id": "loseTitle",
+      "label": "Failure Text",
+      "type": "text",
+      "value": "LOOP RESET",
+      "selector": "#result-title"
+    }
+  ],
+  "prompts": [],
+  "voices": []
+};
+
+        // Helpers
+        function getConfig(category, id) {
+            return window.sekaiEditable[category]?.find(i => i.id === id)?.value;
+        }
+
+        function setNestedValue(obj, path, value) {
+            const parts = path.split('.');
+            let current = obj;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!current[parts[i]]) current[parts[i]] = {};
+                current = current[parts[i]];
+            }
+            current[parts[parts.length - 1]] = value;
+        }
+
+        function applyAllEditableValues() {
+            window.sekaiEditable.tune?.forEach(t => { if (t.path) setNestedValue(window, t.path, t.value); });
+            window.sekaiEditable.colors?.forEach(c => { if (c.cssVar) document.documentElement.style.setProperty(c.cssVar, c.value); });
+            window.sekaiEditable.videos?.forEach(vid => { if (vid.path) setNestedValue(window, vid.path, vid.value); });
+            
+            // Audio elements
+            ['music', 'sfx'].forEach(cat => {
+                window.sekaiEditable[cat]?.forEach(item => {
+                    if (item.selector) {
+                        const el = document.querySelector(item.selector);
+                        if (el && el.src !== item.value) { el.src = item.value; el.load(); }
+                    }
+                });
+            });
+
+            // Images logic is handled during Three.js material creation
+        }
+
+        // ==========================================
+        // COMMUNICATION API
+        // ==========================================
+        function sendMessage(type, data = null, expectResponse = true, sessionCode = undefined) {
+            const taskId = 'task_' + Math.random().toString(36).substr(2, 9);
+            return new Promise((resolve, reject) => {
+                if (expectResponse) {
+                    const listener = (event) => {
+                        if (event.data?.origin !== 'sekai_gaming_iframe_api') return;
+                        if (event.data.taskId === taskId) {
+                            window.removeEventListener('message', listener);
+                            if (event.data.error) reject(event.data.error);
+                            else resolve(event.data);
+                        }
+                    };
+                    window.addEventListener('message', listener);
+                }
+                
+                const message = { origin: 'sekai_gaming_iframe_api', type, taskId, data };
+                if (sessionCode) message.sessionCode = sessionCode;
+                window.parent.postMessage(message, '*');
+                if (!expectResponse) resolve();
+            });
+        }
+
+        // ==========================================
+        // MAP GENERATION (Infinite & Procedural)
+        // ==========================================
+        const mutatedCells = new Map();
+        const VIEW_RADIUS = 12;
+
+        function getCell(x, z) {
+            const key = `${x},${z}`;
+            if (mutatedCells.has(key)) return mutatedCells.get(key);
+            
+            // Spawn safety area
+            if (Math.abs(x) < 3 && Math.abs(z) < 3) return '.';
+            
+            // Deterministic hash based on grid coordinate
+            const val = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+            const hash = val - Math.floor(val);
+            
+            // Maze pattern connectivity
+            if (x % 2 === 0 && z % 2 === 0) return 'W';
+            if (x % 2 !== 0 && z % 2 !== 0) return '.';
+            
+            // Outer random pathways
+            return hash < 0.38 ? 'W' : '.';
+        }
+
+        // ==========================================
+        // THREE.JS ENGINE
+        // ==========================================
+        let scene, camera, renderer, clock, playerGroup;
+        let wallMesh, floorMesh, ceilingMesh;
+        let floorTex, ceilTex;
+        let stalkerEntity = null;
+        let stalkerTimer = 0;
+        let walkTime = 0;
+
+        let lastPlayerGridX = null;
+        let lastPlayerGridZ = null;
+
+        const TILE_SIZE = 1;
+        const PLAYER_SIZE = 0.2;
+
+        function initThreeJS() {
+            const canvas = document.getElementById('three-canvas');
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x010101);
+            scene.fog = new THREE.FogExp2(0x010101, 0.65); // extremely dark fog close by
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 50);
+            
+            clock = new THREE.Clock();
+
+            playerGroup = new THREE.Group();
+            playerGroup.add(camera);
+            camera.position.set(0, 0.5, 0); // Eye height
+
+            scene.add(playerGroup);
+
+            // Realistic Flashlight (Warm tone, very dim, small range)
+            const flashlight = new THREE.SpotLight(0xffaa44, 0.15);
+            flashlight.angle = Math.PI / 6;
+            flashlight.penumbra = 0.8;
+            flashlight.decay = 2.0;
+            flashlight.distance = 3.5;
+            playerGroup.add(flashlight);
+            flashlight.position.set(0.1, 0.4, 0);
+            flashlight.target.position.set(0, 0.4, 1);
+            playerGroup.add(flashlight.target);
+
+            // Orange Torch Light (very dim, extremely small radius around player)
+            const torchLight = new THREE.PointLight(0xff5500, 0.15, 1.8);
+            torchLight.position.set(0, 0.4, 0);
+            playerGroup.add(torchLight);
+
+            const ambient = new THREE.AmbientLight(0x010101, 0.02); 
+            scene.add(ambient);
+
+            buildLevel();
+            loadStalker();
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function loadStalker() {
+            const loader = new GLTFLoader();
+            const modelUrl = getConfig('models', 'stalker_model');
+            if (modelUrl) {
+                loader.load(modelUrl, (gltf) => {
+                    stalkerEntity = gltf.scene;
+                    stalkerEntity.scale.set(0.4, 0.4, 0.4);
+                    stalkerEntity.visible = false;
+                    scene.add(stalkerEntity);
+                });
+            }
+        }
+
+        function createProceduralTexture(type) {
+            const cvs = document.createElement('canvas');
+            cvs.width = 256; cvs.height = 256;
+            const ctx = cvs.getContext('2d');
+            
+            if (type === 'wall') {
+                // Old wallpaper texture (Lighter colors for better visibility)
+                ctx.fillStyle = '#fffdfa'; ctx.fillRect(0,0,256,256);
+                ctx.fillStyle = '#f2efe6';
+                // Vertical stripes
+                for(let x=0; x<256; x+=32) {
+                    ctx.fillRect(x, 0, 14, 256);
+                }
+                // Subtle floral pattern
+                ctx.fillStyle = '#e8dec5';
+                for(let y=16; y<256; y+=32) {
+                    for(let x=16; x<256; x+=32) {
+                        ctx.beginPath();
+                        ctx.arc(x, y, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                        // Petals
+                        ctx.fillRect(x-4, y-1, 8, 2);
+                        ctx.fillRect(x-1, y-4, 2, 8);
+                    }
+                }
+            } else {
+                ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,0,256,256);
+                ctx.fillStyle = '#111';
+                for(let i=0; i<1000; i++) {
+                    ctx.fillRect(Math.random()*256, Math.random()*256, 4, 4);
+                }
+            }
+            const tex = new THREE.CanvasTexture(cvs);
+            tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+            tex.magFilter = THREE.NearestFilter; // retro look
+            return tex;
+        }
+
+        function getTexture(type, id) {
+            const url = getConfig('images', id);
+            if (url) {
+                const tex = new THREE.TextureLoader().load(url);
+                tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+                return tex;
+            }
+            return createProceduralTexture(type);
+        }
+
+        function updateDynamicWalls(force = false) {
+            const px = Math.round(playerGroup.position.x);
+            const pz = Math.round(playerGroup.position.z);
+
+            if (!force && px === lastPlayerGridX && pz === lastPlayerGridZ) return;
+
+            lastPlayerGridX = px;
+            lastPlayerGridZ = pz;
+
+            if (wallMesh) scene.remove(wallMesh);
+
+            const walls = [];
+            for (let z = pz - VIEW_RADIUS; z <= pz + VIEW_RADIUS; z++) {
+                for (let x = px - VIEW_RADIUS; x <= px + VIEW_RADIUS; x++) {
+                    if (getCell(x, z) === 'W') {
+                        walls.push({ x, z });
+                    }
+                }
+            }
+
+            const wallTex = getTexture('wall', 'texWall');
+            const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.9, metalness: 0.15 });
+            const boxGeo = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            
+            wallMesh = new THREE.InstancedMesh(boxGeo, wallMat, walls.length);
+            const dummy = new THREE.Object3D();
+            
+            walls.forEach((w, idx) => {
+                dummy.position.set(w.x * TILE_SIZE, TILE_SIZE/2, w.z * TILE_SIZE);
+                dummy.updateMatrix();
+                wallMesh.setMatrixAt(idx, dummy.matrix);
+            });
+            
+            scene.add(wallMesh);
+
+            // Move floor & ceiling relative to player grid block
+            if (floorMesh) {
+                floorMesh.position.set(px, 0, pz);
+                if (floorTex) {
+                    floorTex.offset.set(px / (VIEW_RADIUS * 3), pz / (VIEW_RADIUS * 3));
+                }
+            }
+            if (ceilingMesh) {
+                ceilingMesh.position.set(px, TILE_SIZE, pz);
+            }
+        }
+
+        function buildLevel() {
+            floorTex = getTexture('floor', 'texFloor');
+            floorTex.repeat.set(VIEW_RADIUS * 3, VIEW_RADIUS * 3);
+            
+            const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.9 });
+            const ceilMat = new THREE.MeshStandardMaterial({ color: 0x010101, roughness: 1.0 });
+
+            const floorPlane = new THREE.PlaneGeometry(VIEW_RADIUS * 3, VIEW_RADIUS * 3);
+            floorMesh = new THREE.Mesh(floorPlane, floorMat);
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.position.set(0, 0, 0);
+            scene.add(floorMesh);
+
+            const ceilPlane = new THREE.PlaneGeometry(VIEW_RADIUS * 3, VIEW_RADIUS * 3);
+            ceilingMesh = new THREE.Mesh(ceilPlane, ceilMat);
+            ceilingMesh.rotation.x = Math.PI / 2;
+            ceilingMesh.position.set(0, TILE_SIZE, 0);
+            scene.add(ceilingMesh);
+
+            playerGroup.position.set(0, 0, 0);
+            updateDynamicWalls(true);
+        }
+
+        function onWindowResize() {
+            const canvas = renderer.domElement;
+            camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+        }
+
+        // ==========================================
+        // INPUT CONTROLS
+        // ==========================================
+        let moveTouchId = null;
+        let lookTouchId = null;
+        let moveOrigin = { x: 0, y: 0 };
+        let lookLast = { x: 0, y: 0 };
+        let moveVector = { x: 0, y: 0 };
+        
+        let yaw = 0;
+        let pitch = 0;
+
+        function initControls() {
+            const zMove = document.getElementById('zone-move');
+            const zLook = document.getElementById('zone-look');
+            const joyBase = document.getElementById('joystick-base');
+            const joyNub = document.getElementById('joystick-nub');
+
+            zMove.addEventListener('pointerdown', e => {
+                if(moveTouchId !== null) return;
+                moveTouchId = e.pointerId;
+                moveOrigin = { x: e.clientX, y: e.clientY };
+                
+                joyBase.style.left = e.clientX + 'px';
+                joyBase.style.top = e.clientY + 'px';
+                joyNub.style.left = e.clientX + 'px';
+                joyNub.style.top = e.clientY + 'px';
+                joyBase.style.display = 'block';
+                joyNub.style.display = 'block';
+                
+                zMove.setPointerCapture(e.pointerId);
+            });
+
+            zMove.addEventListener('pointermove', e => {
+                if(e.pointerId !== moveTouchId) return;
+                let dx = e.clientX - moveOrigin.x;
+                let dy = e.clientY - moveOrigin.y;
+                const maxDist = 40;
+                const dist = Math.hypot(dx, dy);
+                if (dist > maxDist) {
+                    dx = (dx/dist) * maxDist;
+                    dy = (dy/dist) * maxDist;
+                }
+                
+                joyNub.style.left = (moveOrigin.x + dx) + 'px';
+                joyNub.style.top = (moveOrigin.y + dy) + 'px';
+                
+                moveVector.x = dx / maxDist;
+                moveVector.y = dy / maxDist; // Positive is pulling back
+            });
+
+            zMove.addEventListener('pointerup', e => {
+                if(e.pointerId === moveTouchId) {
+                    moveTouchId = null;
+                    moveVector = { x: 0, y: 0 };
+                    joyBase.style.display = 'none';
+                    joyNub.style.display = 'none';
+                    zMove.releasePointerCapture(e.pointerId);
+                }
+            });
+
+            zMove.addEventListener('pointercancel', e => {
+                if(e.pointerId === moveTouchId) {
+                    moveTouchId = null;
+                    moveVector = { x: 0, y: 0 };
+                    joyBase.style.display = 'none';
+                    joyNub.style.display = 'none';
+                }
+            });
+
+            // Look
+            zLook.addEventListener('pointerdown', e => {
+                if(lookTouchId !== null) return;
+                lookTouchId = e.pointerId;
+                lookLast = { x: e.clientX, y: e.clientY };
+                zLook.setPointerCapture(e.pointerId);
+            });
+
+            zLook.addEventListener('pointermove', e => {
+                if(e.pointerId !== lookTouchId) return;
+                const dx = e.clientX - lookLast.x;
+                const dy = e.clientY - lookLast.y;
+                lookLast = { x: e.clientX, y: e.clientY };
+
+                const sensitivity = 0.006;
+                yaw -= dx * sensitivity;
+                pitch -= dy * sensitivity;
+                pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+            });
+
+            zLook.addEventListener('pointerup', e => {
+                if(e.pointerId === lookTouchId) {
+                    lookTouchId = null;
+                    zLook.releasePointerCapture(e.pointerId);
+                }
+            });
+            zLook.addEventListener('pointercancel', e => {
+                if(e.pointerId === lookTouchId) lookTouchId = null;
+            });
+        }
+
+        // Camera remains strictly attached to first person perspective group
+
+        // ==========================================
+        // GAME LOGIC
+        // ==========================================
+
+        function checkCollision(newX, newZ) {
+            const points = [
+                {x: newX - PLAYER_SIZE, z: newZ - PLAYER_SIZE},
+                {x: newX + PLAYER_SIZE, z: newZ - PLAYER_SIZE},
+                {x: newX - PLAYER_SIZE, z: newZ + PLAYER_SIZE},
+                {x: newX + PLAYER_SIZE, z: newZ + PLAYER_SIZE}
+            ];
+
+            for (let p of points) {
+                const gx = Math.round(p.x);
+                const gz = Math.round(p.z);
+                
+                if (getCell(gx, gz) === 'W') return true;
+            }
+            return false;
+        }
+
+        function updatePlayerMovement(delta) {
+            playerGroup.rotation.y = yaw;
+            camera.rotation.x = pitch;
+
+            if (moveVector.x === 0 && moveVector.y === 0) {
+                walkTime = 0;
+                return;
+            }
+
+            walkTime += delta;
+            const speed = appState.config.playerSpeed;
+            const dist = speed * delta;
+
+            const dirX = -Math.sin(yaw);
+            const dirZ = -Math.cos(yaw);
+            const rightX = Math.cos(yaw);
+            const rightZ = -Math.sin(yaw);
+
+            let dx = (dirX * -moveVector.y + rightX * moveVector.x) * dist;
+            let dz = (dirZ * -moveVector.y + rightZ * moveVector.x) * dist;
+
+            let targetX = playerGroup.position.x + dx;
+            if (!checkCollision(targetX, playerGroup.position.z)) playerGroup.position.x = targetX;
+            let targetZ = playerGroup.position.z + dz;
+            if (!checkCollision(playerGroup.position.x, targetZ)) playerGroup.position.z = targetZ;
+
+            updateDynamicWalls();
+
+            // Head Bob
+            camera.position.y = 0.5 + Math.sin(walkTime * 8) * 0.03;
+            camera.position.x = Math.sin(walkTime * 4) * 0.02;
+        }
+
+        let scareTimer = 0;
+        let ambientFlickerTime = 0;
+        let shadowFigure = null;
+        let shadowActive = false;
+
+        function updateStalker(delta) {
+            if (!stalkerEntity) return;
+
+            if (!stalkerEntity.visible) {
+                // Spawn stalker somewhere in the direction the player is NOT looking
+                if (Math.random() < 0.015) {
+                    const spawnAngle = yaw + Math.PI + (Math.random() - 0.5) * 1.5; 
+                    const dist = 6 + Math.random() * 3;
+                    const sx = playerGroup.position.x + Math.sin(spawnAngle) * dist;
+                    const sz = playerGroup.position.z + Math.cos(spawnAngle) * dist;
+
+                    const gx = Math.round(sx);
+                    const gz = Math.round(sz);
+                    if (getCell(gx, gz) === '.') {
+                        stalkerEntity.position.set(sx, 0.4, sz);
+                        stalkerEntity.visible = true;
+                        stalkerTimer = 0;
+                    }
+                }
+            } else {
+                // Stalker creeps towards the player
+                const dx = playerGroup.position.x - stalkerEntity.position.x;
+                const dz = playerGroup.position.z - stalkerEntity.position.z;
+                const dist = Math.hypot(dx, dz);
+                
+                if (dist > 0.1) {
+                    stalkerEntity.position.x += (dx / dist) * delta * 1.2;
+                    stalkerEntity.position.z += (dz / dist) * delta * 1.2;
+                    stalkerEntity.rotation.y = Math.atan2(dx, dz);
+                }
+
+                // Check if in camera frustum
+                const frustum = new THREE.Frustum();
+                const projScreenMatrix = new THREE.Matrix4();
+                projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+                frustum.setFromProjectionMatrix(projScreenMatrix);
+
+                if (frustum.containsPoint(stalkerEntity.position)) {
+                    stalkerTimer += delta;
+                    if (stalkerTimer > 0.5) {
+                        stalkerEntity.visible = false;
+                    }
+                }
+
+                // If caught - DO NOT DIE, instead scare and reposition stalker
+                if (dist < 0.7) {
+                    stalkerEntity.visible = false;
+                    playSound('sfx-lose', 'lose');
+                    const noise = document.getElementById('glitch-noise');
+                    if (noise) {
+                        noise.style.opacity = '0.7';
+                        setTimeout(() => { noise.style.opacity = '0'; }, 400);
+                    }
+                    sendMessage('gen_vibration', { duration: 300 }, false);
+                }
+            }
+        }
+
+        function triggerRandomAudioScare() {
+            if (!audioCtx) return;
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            
+            const rand = Math.random();
+            const now = audioCtx.currentTime;
+            
+            if (rand < 0.33) {
+                // Distant bang
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(70, now);
+                osc.frequency.exponentialRampToValueAtTime(25, now + 1.5);
+                
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(120, now);
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                gain.gain.setValueAtTime(0.7, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 1.8);
+                
+                osc.start(now);
+                osc.stop(now + 1.8);
+            } else if (rand < 0.66) {
+                // Metallic scrape / Whisper Sweep
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(750, now);
+                osc.frequency.linearRampToValueAtTime(950, now + 0.4);
+                
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0, now);
+                gain.gain.linearRampToValueAtTime(0.12, now + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+                
+                osc.start(now);
+                osc.stop(now + 0.5);
+            } else {
+                // Sub-bass rumble
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(40, now);
+                osc.frequency.setValueAtTime(36, now + 1.2);
+                
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0, now);
+                gain.gain.linearRampToValueAtTime(0.4, now + 0.6);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 2.8);
+                
+                osc.start(now);
+                osc.stop(now + 2.8);
+            }
+        }
+
+        function spawnDistantShadow() {
+            if (shadowFigure) scene.remove(shadowFigure);
+
+            const geo = new THREE.CylinderGeometry(0.15, 0.2, 1.6, 6);
+            const mat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.9 });
+            shadowFigure = new THREE.Mesh(geo, mat);
+
+            const angle = yaw + (Math.random() - 0.5) * 0.5; 
+            const dist = 5;
+            const sx = playerGroup.position.x - Math.sin(angle) * dist;
+            const sz = playerGroup.position.z - Math.cos(angle) * dist;
+
+            const gx = Math.round(sx);
+            const gz = Math.round(sz);
+            if (getCell(gx, gz) === '.') {
+                shadowFigure.position.set(gx, 0.8, gz);
+                scene.add(shadowFigure);
+                shadowActive = true;
+            }
+        }
+
+        function removeDistantShadow() {
+            if (shadowFigure) {
+                scene.remove(shadowFigure);
+                shadowFigure = null;
+            }
+            shadowActive = false;
+        }
+
+        function attemptCorridorShift() {
+            const px = Math.round(playerGroup.position.x);
+            const pz = Math.round(playerGroup.position.z);
+            
+            const ox = (Math.random() < 0.5 ? 1 : -1) * (Math.floor(Math.random() * 2) + 2);
+            const oz = (Math.random() < 0.5 ? 1 : -1) * (Math.floor(Math.random() * 2) + 2);
+            
+            const tx = px + ox;
+            const tz = pz + oz;
+
+            const testPoint = new THREE.Vector3(tx, 0.5, tz);
+            const frustum = new THREE.Frustum();
+            const projScreenMatrix = new THREE.Matrix4();
+            projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(projScreenMatrix);
+            
+            if (!frustum.containsPoint(testPoint)) {
+                const originalVal = getCell(tx, tz);
+                const leftVal = getCell(tx - 1, tz);
+                const rightVal = getCell(tx + 1, tz);
+                
+                if (originalVal === 'W' && (leftVal === '.' || rightVal === '.')) {
+                    mutatedCells.set(`${tx},${tz}`, '.');
+                } else if (originalVal === '.' && (leftVal === 'W' || rightVal === 'W')) {
+                    mutatedCells.set(`${tx},${tz}`, 'W');
+                }
+                updateDynamicWalls(true);
+            }
+        }
+
+        function updateMindfucks(delta) {
+            if (appState.gameState !== 'playing') return;
+
+            scareTimer += delta;
+            const freqScale = appState.config.scareFrequency || 0.5;
+
+            // 1. Audio scares
+            if (scareTimer > (12 / freqScale)) {
+                scareTimer = 0;
+                triggerRandomAudioScare();
+            }
+
+            // 2. Flashlight flicker (very dim, short range)
+            const flashlight = playerGroup.children.find(c => c.isSpotLight);
+            if (flashlight) {
+                ambientFlickerTime += delta;
+                if (Math.random() < 0.015) {
+                    flashlight.intensity = 0;
+                } else if (Math.random() < 0.04) {
+                    flashlight.intensity = 0.02 + Math.random() * 0.05;
+                } else {
+                    flashlight.intensity = 0.15;
+                }
+
+                if (stalkerEntity && stalkerEntity.visible) {
+                    const dist = Math.hypot(stalkerEntity.position.x - playerGroup.position.x, stalkerEntity.position.z - playerGroup.position.z);
+                    if (dist < 3) {
+                        flashlight.intensity = Math.random() < 0.35 ? 0 : 0.03;
+                    }
+                }
+            }
+
+            // 3. Dynamic FOV Distortion (Warping reality)
+            if (Math.random() < 0.0018 * freqScale) {
+                gsap.to(camera, {
+                    fov: 105,
+                    duration: 0.3,
+                    onUpdate: () => camera.updateProjectionMatrix(),
+                    onComplete: () => {
+                        gsap.to(camera, {
+                            fov: 75,
+                            duration: 1.8,
+                            delay: 0.4,
+                            onUpdate: () => camera.updateProjectionMatrix()
+                        });
+                    }
+                });
+            }
+
+            // 4. Distant Shadow Spawning (More frequent shadows)
+            if (!shadowActive && Math.random() < 0.02 * freqScale) {
+                spawnDistantShadow();
+            }
+            if (shadowActive && shadowFigure) {
+                const dist = Math.hypot(shadowFigure.position.x - playerGroup.position.x, shadowFigure.position.z - playerGroup.position.z);
+                if (dist < 2.2) {
+                    removeDistantShadow();
+                }
+                
+                const frustum = new THREE.Frustum();
+                const projScreenMatrix = new THREE.Matrix4();
+                projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+                frustum.setFromProjectionMatrix(projScreenMatrix);
+                if (frustum.containsPoint(shadowFigure.position)) {
+                    shadowFigure.scale.y -= delta * 2;
+                    if (shadowFigure.scale.y <= 0) {
+                        removeDistantShadow();
+                    }
+                }
+            }
+
+            // 5. Corridors Shifting (Looking away swaps walls - Rarer)
+            if (Math.random() < 0.0015 * freqScale) {
+                attemptCorridorShift();
+            }
+        }
+
+        let videoTriggered = false;
+        function triggerVideoCutscene() {
+            if (videoTriggered) return;
+            videoTriggered = true;
+            appState.gameState = 'video';
+            
+            const bgm = document.getElementById('music-bgm');
+            if (bgm) bgm.pause();
+            
+            const video = document.getElementById('scare-video');
+            video.style.display = 'block';
+            
+            video.play().catch(err => {
+                console.log("Video playback blocked, attempting muted", err);
+                video.muted = true;
+                video.play().catch(e => console.error("Muted video play failed", e));
+            });
+            
+            video.addEventListener('ended', () => {
+                video.style.display = 'none';
+                const vhs = document.getElementById('vhs-screen');
+                vhs.style.display = 'flex';
+                sendMessage('gen_vibration', { duration: 1000 }, false);
+            });
+        }
+
+        function gameLoop() {
+            requestAnimationFrame(gameLoop);
+            
+            if (appState.gameState === 'video') {
+                return;
+            }
+            
+            if (appState.gameState !== 'playing') {
+                renderer.render(scene, camera);
+                return;
+            }
+
+            const delta = Math.min(clock.getDelta(), 0.1);
+
+            // Check if played for more than 1:30 (90 seconds)
+            if (Date.now() - appState.startTime > 90000) {
+                triggerVideoCutscene();
+                return;
+            }
+
+            updatePlayerMovement(delta);
+            updateStalker(delta);
+            updateMindfucks(delta);
+
+            renderer.render(scene, camera);
+        }
+
+        // ==========================================
+        // SYSTEM CONTROLS
+        // ==========================================
+
+        function startGame() {
+            appState.gameState = 'playing';
+            appState.startTime = Date.now();
+            clock.start();
+        }
+
+        function triggerEnd(win) {
+            appState.gameState = 'lost';
+            appState.scoreTime = Math.round((Date.now() - appState.startTime) / 1000);
+            
+            // Play glitch sounds and activate screen overlay
+            playSound('sfx-lose', 'lose');
+            sendMessage('gen_vibration', { duration: 400 }, false);
+
+            const glitchOverlay = document.getElementById('glitch-overlay');
+            const glitchNoise = document.getElementById('glitch-noise');
+            const glitchText = document.getElementById('glitch-text');
+
+            glitchOverlay.classList.remove('pointer-events-none');
+            glitchOverlay.classList.add('bg-black/95');
+            glitchNoise.style.opacity = '0.5';
+            glitchText.style.opacity = '1';
+
+            setTimeout(() => {
+                // Clear glitch visuals
+                glitchOverlay.classList.remove('bg-black/95');
+                glitchOverlay.classList.add('pointer-events-none');
+                glitchNoise.style.opacity = '0';
+                glitchText.style.opacity = '0';
+
+                // Display custom Wake Up screen
+                document.getElementById('result-title').textContent = getConfig('text', 'loseTitle') || 'LOOP RESET';
+                document.getElementById('result-subtitle').textContent = `The hallways mutated. The cycle restarts.`;
+                document.getElementById('result-time').textContent = `${appState.scoreTime}s`;
+                document.getElementById('result-screen').classList.add('visible');
+            }, 1800);
+        }
+
+        function resetGame() {
+            document.getElementById('result-screen').classList.remove('visible');
+            
+            // Reset state & clear mutated cell coordinates
+            appState.startTime = Date.now();
+            scareTimer = 0;
+            mutatedCells.clear();
+            
+            // Reset Camera
+            yaw = 0; pitch = 0;
+            
+            // Reposition playerGroup
+            playerGroup.position.set(0, 0, 0);
+
+            if (shadowFigure) {
+                scene.remove(shadowFigure);
+                shadowFigure = null;
+            }
+            shadowActive = false;
+
+            if (stalkerEntity) {
+                stalkerEntity.visible = false;
+            }
+
+            // Rebuild levels dynamically
+            updateDynamicWalls(true);
+
+            appState.gameState = 'playing';
+            clock.start();
+        }
+
+        // ==========================================
+        // AUDIO SYSTEM
+        // ==========================================
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = AudioContextClass ? new AudioContextClass() : null;
+        
+        function initBGM() {
+            const el = document.getElementById('music-bgm');
+            if (!el?.src) return;
+            el.loop = true;
+            el.volume = 0.5;
+            const playBgm = () => {
+                el.play().catch(() => {
+                    document.addEventListener('touchstart', playBgm, { once: true });
+                    document.addEventListener('click', playBgm, { once: true });
+                });
+            };
+            playBgm();
+        }
+
+        function playSound(domId, synthType) {
+            const el = document.getElementById(domId);
+            if (el?.src) {
+                el.currentTime = 0;
+                el.play().catch(()=>{});
+                return;
+            }
+            
+            // Procedural Fallback
+            if (!audioCtx) return;
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+
+            if (synthType === 'lose') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(80, now);
+                osc.frequency.linearRampToValueAtTime(30, now + 1.2);
+                gain.gain.setValueAtTime(0.6, now);
+                gain.gain.linearRampToValueAtTime(0, now + 1.2);
+                osc.start(now); osc.stop(now + 1.2);
+            }
+        }
+
+        // ==========================================
+        // INITIALIZATION
+        // ==========================================
+        async function initApp() {
+            applyAllEditableValues();
+            initBGM(); 
+            
+            initThreeJS();
+            initControls();
+
+            // Copy Code functionality
+            const btnCopy = document.getElementById('btn-copy-code');
+            if (btnCopy) {
+                btnCopy.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    try {
+                        // Create a temporary DOM to clean and remove the copy button itself
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(document.documentElement.outerHTML, 'text/html');
+                        const copyBtnInDoc = doc.getElementById('btn-copy-code');
+                        if (copyBtnInDoc) {
+                            copyBtnInDoc.remove();
+                        }
+                        const htmlCode = doc.documentElement.outerHTML;
+                        await navigator.clipboard.writeText(htmlCode);
+                        btnCopy.textContent = "COPIED TO CLIPBOARD";
+                        btnCopy.style.borderColor = "rgba(0, 255, 0, 0.4)";
+                        btnCopy.style.color = "rgba(0, 255, 0, 0.7)";
+                        setTimeout(() => {
+                            btnCopy.textContent = "COPY SEQUENCE CODE";
+                            btnCopy.style.borderColor = "rgba(255, 255, 255, 0.15)";
+                            btnCopy.style.color = "rgba(255, 255, 255, 0.4)";
+                        }, 2000);
+                    } catch (err) {
+                        console.error("Failed to copy code", err);
+                        btnCopy.textContent = "COPY FAILED";
+                        setTimeout(() => {
+                            btnCopy.textContent = "COPY SEQUENCE CODE";
+                        }, 2000);
+                    }
+                });
+            }
+
+            // Direct start
+            setTimeout(startGame, 100);
+            
+            document.getElementById('btn-retry').addEventListener('click', resetGame);
+            
+            document.getElementById('btn-share').addEventListener('click', async (e) => {
+                const btn = e.currentTarget;
+                if(btn.dataset.loading === 'true') return;
+                btn.dataset.loading = 'true';
+                btn.disabled = true;
+                const origText = btn.innerHTML;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sharing...';
+                
+                try {
+                    const zone = document.getElementById('share-zone');
+                    const jpgImg = await window.snapdom.toJpg(zone, { quality: 0.8, width: zone.offsetWidth * 2, height: zone.offsetHeight * 2 });
+                    
+                    const title = `I survived the shifting labyrinth loop for ${appState.scoreTime}s before losing my mind.`;
+                        
+                    sendMessage('invoke_share', { title, coverImageBase64: jpgImg.src }, false);
+                } catch(err) {
+                    console.error('Share failed', err);
+                } finally {
+                    btn.dataset.loading = 'false';
+                    btn.disabled = false;
+                    btn.innerHTML = origText;
+                }
+            });
+
+            gameLoop();
+        }
+
+        document.addEventListener('DOMContentLoaded', initApp);
+
+        // ==========================================
+        // PREVIEW EDITING API
+        // ==========================================
+        (function setupPreviewEditingAPI() {
+            window.addEventListener('message', (event) => {
+                const msg = event.data;
+                if (msg?.origin !== 'sekai_gaming_iframe_api') return;
+
+                switch (msg.type) {
+                    case 'get_editable_metadata':
+                        window.parent.postMessage({
+                            origin: 'sekai_gaming_iframe_api',
+                            type: 'receive_editable_metadata',
+                            taskId: msg.taskId,
+                            data: window.sekaiEditable || {}
+                        }, '*');
+                        break;
+                    case 'apply_change':
+                        const success = applySingleChange(msg.data.id, msg.data.value, msg.data.name, msg.data.description);
+                        window.parent.postMessage({
+                            origin: 'sekai_gaming_iframe_api',
+                            type: 'receive_apply_change',
+                            taskId: msg.taskId,
+                            data: { success }
+                        }, '*');
+                        break;
+                    case 'get_current_html':
+                        window.parent.postMessage({
+                            origin: 'sekai_gaming_iframe_api',
+                            type: 'receive_current_html',
+                            taskId: msg.taskId,
+                            data: { html: document.documentElement.outerHTML }
+                        }, '*');
+                        break;
+                    case 'reset_changes':
+                        location.reload();
+                        break;
+                }
+            });
+
+            function applySingleChange(id, value, name, description) {
+                const categories = ['tune', 'images', 'videos', 'music', 'sfx', 'colors', 'text', 'prompts', 'voices'];
+                for (const cat of categories) {
+                    const item = window.sekaiEditable[cat]?.find(i => i.id === id);
+                    if (!item) continue;
+
+                    item.value = value;
+                    if (name) item.name = name;
+                    if (description) item.description = description;
+
+                    if (item.cssVar) {
+                        document.documentElement.style.setProperty(item.cssVar, value);
+                    } else if (item.path) {
+                        setNestedValue(window, item.path, value);
+                    } else if (item.selector) {
+                        const el = document.querySelector(item.selector);
+                        if (!el) return false;
+
+                        if (el.tagName === 'AUDIO' || el.tagName === 'VIDEO') {
+                            const wasPlaying = !el.paused;
+                            el.src = value;
+                            el.load();
+                            if (wasPlaying) el.play().catch(() => {});
+                        } else if (item.type === 'text') {
+                            el.textContent = value;
+                        } else {
+                            if(item.property === 'src') el.src = value;
+                            else if (item.property === 'backgroundImage') el.style.backgroundImage = `url('${value}')`;
+                        }
+                    } else if (cat === 'images' && scene) {
+                        // Rebuild map materials if texture changed
+                        const tex = new THREE.TextureLoader().load(value);
+                        tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+                        
+                        if(id === 'texWall' && wallMesh) {
+                            wallMesh.material.map = tex;
+                            wallMesh.material.needsUpdate = true;
+                        } else if (id === 'texFloor') {
+                            tex.repeat.set(VIEW_RADIUS * 3, VIEW_RADIUS * 3);
+                            if(floorMesh) { floorMesh.material.map = tex; floorMesh.material.needsUpdate = true; }
+                            if(ceilingMesh) { ceilingMesh.material.map = tex; ceilingMesh.material.needsUpdate = true; }
+                        }
+                    }
+                    return true;
+                }
+                return false;
+            }
+        })();
+
+    </script>
+
+</body></html>
