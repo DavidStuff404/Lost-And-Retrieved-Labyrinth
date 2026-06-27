@@ -1,4 +1,4 @@
-<html lang="en" style="height: 100%; overscroll-behavior: contain; -webkit-touch-callout: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; --col-amb: #020202; --col-torch: #ffffff;"><head><style>*{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;}input,textarea,[contenteditable]{-webkit-user-select:text!important;user-select:text!important;}</style>
+<html lang="en" style="--col-amb: #020202; --col-torch: #ffffff; height: 100%; overscroll-behavior: contain; -webkit-touch-callout: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;"><head><style>*{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;}input,textarea,[contenteditable]{-webkit-user-select:text!important;user-select:text!important;}</style>
 <script>
 (function() {
   if (typeof CustomEvent === 'function') return;
@@ -1547,7 +1547,6 @@
         <video id="scare-video" src="https://prod-data.sekai.chat/v3-games/chat-creation/eac54441-d110-476e-8384-75988ae24be8.mov" playsinline="" style="display:none; position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:100;"></video>
         <div id="vhs-screen" style="display:none; position:absolute; inset:0; width:100%; height:100%; background:black; color:#00ff00; font-family:monospace; font-size:48px; justify-content:center; align-items:center; z-index:101; flex-direction:column; text-shadow: 0 0 10px #00ff00;">
             <div style="font-size: 80px; letter-spacing: 10px; margin-bottom: 20px; animation: glitchText 1s infinite alternate;">: )</div>
-            <div style="font-size: 14px; color: #555; letter-spacing: 2px;">VHS FEED PLAYBACK ENDED</div>
         </div>
 
         <!-- Glitch / Wake Up / Reset Screen -->
@@ -2020,6 +2019,7 @@
             const zLook = document.getElementById('zone-look');
             const joyBase = document.getElementById('joystick-base');
             const joyNub = document.getElementById('joystick-nub');
+            const canvas = document.getElementById('three-canvas');
 
             // Keyboard input listeners
             window.addEventListener('keydown', e => {
@@ -2045,6 +2045,25 @@
             if (!hasTouch || isFinePointer) {
                 enablePCMode();
             }
+
+            // Pointer Lock request on click for PC
+            const requestPointerLock = () => {
+                if (isPC && window.appState.gameState === 'playing' && document.pointerLockElement !== canvas) {
+                    canvas.requestPointerLock();
+                }
+            };
+            canvas.addEventListener('click', requestPointerLock);
+            zLook.addEventListener('click', requestPointerLock);
+
+            // Pointer Lock movement capture
+            document.addEventListener('mousemove', e => {
+                if (isPC && document.pointerLockElement === canvas && window.appState.gameState === 'playing') {
+                    const sensitivity = 0.002;
+                    yaw -= e.movementX * sensitivity;
+                    pitch -= e.movementY * sensitivity;
+                    pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, pitch));
+                }
+            });
 
             zMove.addEventListener('pointerdown', e => {
                 if(isPC || moveTouchId !== null) return;
